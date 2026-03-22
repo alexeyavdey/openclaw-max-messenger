@@ -12,9 +12,9 @@ const plugin = {
   register(api: OpenClawPluginApi) {
     api.logger.info("Max Messenger plugin registering...");
     setMaxRuntime(api.runtime);
-    api.registerChannel({ plugin: maxChannel });
+    api.registerChannel({ plugin: maxChannel as never });
     api.logger.info("Max Messenger channel registered");
-    api.registerTool(sendFileTool);
+    api.registerTool(sendFileTool as never);
     api.logger.info("Max Messenger tool max_send_file registered");
   },
 };

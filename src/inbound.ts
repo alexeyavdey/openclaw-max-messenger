@@ -165,10 +165,10 @@ export async function handleMaxInbound(params: {
       dmPolicy,
       allowFrom: configAllowFrom,
       storeAllowFrom,
-      isSenderAllowed: (allowList) => {
+      isSenderAllowed: (allowList: Array<string | number>) => {
         const normalizedSender = String(senderId);
         return allowList.some(
-          (entry) => stripMaxPrefix(String(entry)) === normalizedSender
+          (entry: string | number) => stripMaxPrefix(String(entry)) === normalizedSender
         );
       },
     });
@@ -179,12 +179,12 @@ export async function handleMaxInbound(params: {
         channel: CHANNEL_ID,
         senderId: String(senderId),
         senderIdLine: `maxUserId: ${senderId}`,
-        upsertPairingRequest: (params) =>
+        upsertPairingRequest: (params: { id: string; meta?: Record<string, string | null | undefined> }) =>
           pairing.upsertPairingRequest({
             id: params.id,
             meta: params.meta,
           }),
-        sendPairingReply: async (text) => {
+        sendPairingReply: async (text: string) => {
           if (api) {
             await api.sendMessageToChat(Number(chatId), text);
           }
@@ -268,19 +268,19 @@ export async function handleMaxInbound(params: {
     storePath,
     ctxPayload,
     core,
-    deliver: async (payload) => {
+    deliver: async (payload: OutboundReplyPayload) => {
       await deliverMaxReply({
         payload,
         chatId,
         account,
       });
     },
-    onRecordError: (err) => {
+    onRecordError: (err: unknown) => {
       runtime?.error?.(
         `max: failed updating session meta: ${String(err)}`,
       );
     },
-    onDispatchError: (err, info) => {
+    onDispatchError: (err: unknown, info: { kind: string }) => {
       runtime?.error?.(
         `max ${info.kind} reply failed: ${String(err)}`,
       );

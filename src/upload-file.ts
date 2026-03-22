@@ -45,7 +45,7 @@ export async function rawUpload(
   const name = typeof source === "string" ? path.basename(source) : filename;
 
   const formData = new FormData();
-  formData.append("data", new Blob([buf]), name);
+  formData.append("data", new Blob([buf as BlobPart]), name);
   const uploadRes = await fetch(uploadUrl, { method: "POST", body: formData });
 
   // Token may come from the upload response instead of getUploadUrl

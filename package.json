@@ -17,7 +17,9 @@
     "channel-plugin"
   ],
   "openclaw": {
-    "extensions": ["./src/index.ts"],
+    "extensions": [
+      "./src/index.ts"
+    ],
     "channel": {
       "id": "max",
       "label": "Max Messenger",
@@ -26,7 +28,9 @@
       "docsLabel": "max",
       "blurb": "Max Messenger bot integration via Bot API.",
       "order": 91,
-      "aliases": ["max-messenger"]
+      "aliases": [
+        "max-messenger"
+      ]
     },
     "install": {
       "localPath": "extensions/max",
@@ -40,7 +44,11 @@
   "dependencies": {
     "@maxhub/max-bot-api": "^0.2.2"
   },
+  "peerDependencies": {
+    "openclaw": ">=2026.3.13"
+  },
   "devDependencies": {
+    "@types/node": "^25.5.0",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"
   },

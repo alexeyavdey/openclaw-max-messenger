@@ -102,7 +102,7 @@ export const maxChannel = {
     sendText: async (ctx: MaxOutboundContext) => {
       const api = requireApi(ctx.account);
       // ctx.chatId or ctx.to may contain "max:123" prefix
-      const rawId = ctx.chatId ?? (ctx as Record<string, unknown>).to as string ?? "";
+      const rawId = ctx.chatId ?? (ctx as unknown as Record<string, unknown>).to as string ?? "";
       const chatId = Number(stripMaxPrefix(String(rawId)));
 
       if (ctx.messageId) {
@@ -170,17 +170,19 @@ export const maxChannel = {
 
       ctx.log?.info(`[${accountId}] starting Max Messenger polling`);
 
-      const logger = ctx.log ?? {
-        info: (...args: unknown[]) => runtime.log?.(String(args.join(" "))),
-        warn: (...args: unknown[]) => runtime.log?.(String(args.join(" "))),
-        error: (...args: unknown[]) => runtime.error?.(String(args.join(" "))),
-        debug: () => {},
-      };
+      const logger: import("./types.js").PluginLogger = ctx.log
+        ? { ...ctx.log, debug: (ctx.log as Record<string, unknown>).debug as ((...args: unknown[]) => void) ?? (() => {}) }
+        : {
+            info: (...args: unknown[]) => runtime.log?.(String(args.join(" "))),
+            warn: (...args: unknown[]) => runtime.log?.(String(args.join(" "))),
+            error: (...args: unknown[]) => runtime.error?.(String(args.join(" "))),
+            debug: () => {},
+          };
 
       await startPolling({
         accounts: { [accountId]: account },
         logger,
-        runtime,
+        runtime: runtime as import("openclaw/plugin-sdk").RuntimeEnv,
       });
 
       // Keep the promise pending until abort signal fires
