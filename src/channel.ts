@@ -1,6 +1,6 @@
 import {
   buildAccountScopedDmSecurityPolicy,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/channel-policy";
 import { getApi as getApiFromRegistry, getAllBots } from "./registry.js";
 import { startPolling, stopPolling } from "./polling.js";
 import { rawUpload, resolveUploadType, stripMaxPrefix } from "./upload-file.js";

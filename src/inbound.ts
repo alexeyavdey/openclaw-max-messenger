@@ -2,20 +2,31 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import {
-  dispatchInboundReplyWithBase,
-  resolveOutboundMediaUrls,
-  resolveDmGroupAccessWithLists,
-  issuePairingChallenge,
-  createScopedPairingAccess,
-  type OutboundReplyPayload,
   type OpenClawConfig,
   type RuntimeEnv,
   type PluginRuntime,
 } from "openclaw/plugin-sdk";
+import {
+  dispatchInboundReplyWithBase
+} from "openclaw/plugin-sdk/inbound-reply-dispatch";
+
+import {
+  resolveOutboundMediaUrls,
+  type OutboundReplyPayload
+} from "openclaw/plugin-sdk/reply-payload";
+
+import {
+  resolveDmGroupAccessWithLists
+} from "openclaw/plugin-sdk/channel-policy";
+
+import {
+  issuePairingChallenge
+} from "openclaw/plugin-sdk/conversation-runtime";
+import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import { getMaxRuntime } from "./runtime.js";
 import { getApi } from "./registry.js";
 import { rawUpload, resolveUploadType, stripMaxPrefix } from "./upload-file.js";
-import type { InboundMessage, MaxAccountConfig } from "./types.js";
+import type { InboundMessage, MaxAccountConfig, PluginLogger } from "./types.js";
 
 async function saveInboundFile(
   _core: PluginRuntime,
@@ -104,9 +115,10 @@ export async function handleMaxInbound(params: {
   message: InboundMessage;
   account: MaxAccountConfig;
   accountId: string;
+  logger: PluginLogger;
   runtime?: RuntimeEnv;
 }): Promise<void> {
-  const { message, account, accountId, runtime } = params;
+  const { message, account, accountId, logger, runtime } = params;
   const core = getMaxRuntime();
 
   let rawBody = message.text?.trim() ?? "";
@@ -151,14 +163,16 @@ export async function handleMaxInbound(params: {
   // --- Access control: check DM policy / pairing ---
   // Max bots live in group-style chats, so apply policy regardless of isGroup
   const dmPolicy = account.dmPolicy;
+  logger.debug(`MAX inbound. dmPolicy: ${dmPolicy}, senderId: ${senderId}`);
   if (dmPolicy && dmPolicy !== "open") {
-    const pairing = createScopedPairingAccess({
+    const pairing = createChannelPairingController ({
       core,
       channel: CHANNEL_ID,
       accountId,
     });
     const storeAllowFrom = await pairing.readAllowFromStore();
     const configAllowFrom = account.allowFrom ?? [];
+    logger.debug(`MAX inbound. configAllowFrom: ${configAllowFrom}`);
 
     const { decision } = resolveDmGroupAccessWithLists({
       isGroup: false,
@@ -167,11 +181,13 @@ export async function handleMaxInbound(params: {
       storeAllowFrom,
       isSenderAllowed: (allowList: Array<string | number>) => {
         const normalizedSender = String(senderId);
+        logger.debug(`MAX inbound. normalizedSender: ${normalizedSender}`);
         return allowList.some(
           (entry: string | number) => stripMaxPrefix(String(entry)) === normalizedSender
         );
       },
     });
+    logger.debug(`MAX inbound. allowFrom: ${storeAllowFrom}, decision: ${decision}`);
 
     if (decision === "pairing") {
       const api = getApi(account.token);
@@ -209,6 +225,7 @@ export async function handleMaxInbound(params: {
       id: senderId,
     },
   });
+  logger.debug(`MAX inbound. route: ${JSON.stringify(route, null, 2)}`);
 
   const fromLabel = isGroup
     ? `group:${chatId}`
@@ -220,6 +237,7 @@ export async function handleMaxInbound(params: {
       | undefined,
     { agentId: route.agentId },
   );
+  logger.debug(`MAX inbound. storePath: ${storePath}`);
 
   const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
   const previousTimestamp = core.channel.session.readSessionUpdatedAt({
@@ -235,6 +253,7 @@ export async function handleMaxInbound(params: {
     envelope: envelopeOptions,
     body: rawBody,
   });
+  logger.debug(`MAX inbound. body: ${body}`);
 
   const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: body,
@@ -259,31 +278,43 @@ export async function handleMaxInbound(params: {
     OriginatingTo: `max:${chatId}`,
     CommandAuthorized: true,
   });
+  logger.debug(`MAX inbound. ctxPayload: ok`);
 
-  await dispatchInboundReplyWithBase({
-    cfg,
-    channel: CHANNEL_ID,
-    accountId,
-    route,
-    storePath,
-    ctxPayload,
-    core,
-    deliver: async (payload: OutboundReplyPayload) => {
-      await deliverMaxReply({
-        payload,
-        chatId,
-        account,
-      });
-    },
-    onRecordError: (err: unknown) => {
-      runtime?.error?.(
-        `max: failed updating session meta: ${String(err)}`,
-      );
-    },
-    onDispatchError: (err: unknown, info: { kind: string }) => {
-      runtime?.error?.(
-        `max ${info.kind} reply failed: ${String(err)}`,
-      );
-    },
-  });
+  try {
+    logger.debug(`MAX inbound. Before dispatchInboundReplyWithBase`);
+
+    await dispatchInboundReplyWithBase({
+      cfg,
+      channel: CHANNEL_ID,
+      accountId,
+      route,
+      storePath,
+      ctxPayload,
+      core,
+      deliver: async (payload: OutboundReplyPayload) => {
+        logger.debug(`MAX inbound. Before deliverMaxReply called with chatId: ${chatId}, payload length: ${payload.text?.length || 0}`);
+        await deliverMaxReply({
+          payload,
+          chatId,
+          account,
+        });
+        logger.debug(`MAX inbound. After deliverMaxReply`);
+      },
+      onRecordError: (err: unknown) => {
+        runtime?.error?.(
+          `max: failed updating session meta: ${String(err)}`,
+        );
+      },
+      onDispatchError: (err: unknown, info: { kind: string }) => {
+        runtime?.error?.(
+          `max ${info.kind} reply failed: ${String(err)}`,
+        );
+      },
+    });
+    logger.debug(`MAX inboind. dispatchInboundReplyWithBase completed successfully`);
+  } catch (error) {
+    logger.debug(`MAX inbound. Fatal error in dispatchInboundReplyWithBase: ${error}`);
+    logger.debug(`MAX inbound. Error stack: ${error instanceof Error ? error.stack : 'No stack'}`);
+    throw error;
+  }
 }

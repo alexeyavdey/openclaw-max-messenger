@@ -105,7 +105,8 @@ export async function startPolling(params: {
         },
         account: config,
         accountId,
-        runtime,
+        logger,
+        runtime
       }).catch((err) => {
         logger.error(`Max inbound handling error (${accountId}):`, err);
       });
@@ -137,7 +138,8 @@ export async function startPolling(params: {
         },
         account: config,
         accountId,
-        runtime,
+        logger,
+        runtime
       }).catch((err) => {
         logger.error(`Max inbound handling error (${accountId}):`, err);
       });

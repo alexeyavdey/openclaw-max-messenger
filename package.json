@@ -45,7 +45,7 @@
     "@maxhub/max-bot-api": "^0.2.2"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.3.13"
+    "openclaw": ">=2026.4.5"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",
