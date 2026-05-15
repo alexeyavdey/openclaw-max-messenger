@@ -131,6 +131,18 @@ Route different Max users to different OpenClaw agents:
 3. Send `/newbot` and follow the instructions
 4. Copy the token and add it to your config
 
+Keep bot tokens out of chats, issues, screenshots, and logs. If a token appears in public support text, rotate it in Max Messenger before reusing the bot.
+
+## Related X/Twitter workflows
+
+Keep this plugin responsible for Max Messenger conversations, files, images, audio, video, inbound attachments, message edits, access control, and per-sender OpenClaw agent routing. When the same OpenClaw agent also needs public X/Twitter data or visible X/Twitter actions, install TweetClaw as a separate OpenClaw plugin:
+
+```bash
+openclaw plugins install @xquik/tweetclaw
+```
+
+[TweetClaw](https://github.com/Xquik-dev/tweetclaw) covers scrape tweets, search tweets, search tweet replies, follower export, user lookup, media upload and download, direct messages, monitor tweets, webhooks, giveaway draws, and approval-gated post tweets or post tweet replies. Use the [TweetClaw GitHub repo](https://github.com/Xquik-dev/tweetclaw) and [npm package](https://www.npmjs.com/package/@xquik/tweetclaw) for setup; the [ClawHub discovery page](https://clawhub.ai/plugins/@xquik/tweetclaw) remains useful for browsing while that listing lags behind npm. Keep X/Twitter connection settings separate from Max Messenger bot settings and review visible X/Twitter actions through OpenClaw approval flows.
+
 ## Known issues
 
 - **Max Bot API SDK token bug**: The official `@maxhub/max-bot-api` SDK loses the upload token when uploading files via Buffer. This plugin works around it with a raw upload helper (`rawUpload`) that calls `getUploadUrl` + manual multipart upload. A patch for the SDK is included in `patches/`.
