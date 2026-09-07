@@ -54,6 +54,53 @@
               ]
             }
           },
+          "streaming": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "off",
+                  "block"
+                ]
+              },
+              "chunkMode": {
+                "type": "string",
+                "enum": [
+                  "length",
+                  "newline"
+                ]
+              },
+              "block": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "coalesce": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "minChars": {
+                        "type": "integer",
+                        "exclusiveMinimum": 0
+                      },
+                      "maxChars": {
+                        "type": "integer",
+                        "exclusiveMinimum": 0
+                      },
+                      "idleMs": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
           "accounts": {
             "type": "object",
             "propertyNames": {
@@ -120,6 +167,10 @@
         "allowFrom": {
           "label": "Max Allowed Senders",
           "help": "Max user ids allowed to talk to the bot. Entries may carry a \"max:\" prefix."
+        },
+        "streaming": {
+          "label": "Max Streaming",
+          "help": "Block streaming for this channel. Each block is a separate Bot API send, so keep block.coalesce.minChars large enough that replies do not arrive in a stutter."
         },
         "accounts": {
           "label": "Max Accounts",

@@ -127,6 +127,15 @@ export const maxChannel: ChannelPlugin<MaxAccountConfig> = {
     reply: true,
   },
 
+  // Every block Max delivers is its own Bot API call, so coalesce into
+  // chunky pieces: smaller values make the reply visibly stutter.
+  streaming: {
+    blockStreamingCoalesceDefaults: {
+      minChars: 280,
+      idleMs: 900,
+    },
+  },
+
   reload: {
     configPrefixes: ["channels.max"],
   },

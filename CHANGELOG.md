@@ -5,6 +5,24 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] — 2026-09-07
+
+### Added
+
+- Block streaming support. `maxChannel.streaming.blockStreamingCoalesceDefaults`
+  supplies coalescing defaults (`minChars: 280`, `idleMs: 900`), which the core
+  uses as a fallback when the config sets none. Every block Max delivers is a
+  separate Bot API send, so the defaults are deliberately chunky.
+- `streaming` in the channel config schema, so `channels.max.streaming.*` can be
+  authored without rebuilding the plugin. Declared keys: `mode` (`off`/`block`),
+  `chunkMode`, and `block.{enabled,coalesce.{minChars,maxChars,idleMs}}`.
+  `preview` and `progress` are deliberately left out: they configure live-preview
+  editing, and this channel ships no `message.live` adapter to honour them.
+
+Block streaming still has to be turned on. It activates only when
+`agents.defaults.blockStreamingDefault` is `"on"` (or a per-channel equivalent);
+these two changes just make Max participate correctly once it is.
+
 ## [0.2.0] — 2026-09-07
 
 Migration to the OpenClaw 2026.9 plugin SDK. **Breaking:** this release requires
@@ -79,5 +97,6 @@ Initial release: Max Messenger channel plugin for OpenClaw — text, media and
 file messaging, inbound attachments, DM access control, per-sender agent
 routing, and the `max_send_file` tool.
 
+[0.3.0]: https://github.com/alexeyavdey/openclaw-max-messenger/releases/tag/v0.3.0
 [0.2.0]: https://github.com/alexeyavdey/openclaw-max-messenger/releases/tag/v0.2.0
 [0.1.0]: https://github.com/alexeyavdey/openclaw-max-messenger/releases/tag/v0.1.0
