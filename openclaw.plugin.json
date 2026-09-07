@@ -6,9 +6,13 @@
   "activation": {
     "onStartup": false
   },
-  "channels": ["max"],
+  "channels": [
+    "max"
+  ],
   "contracts": {
-    "tools": ["max_send_file"]
+    "tools": [
+      "max_send_file"
+    ]
   },
   "configSchema": {
     "type": "object",
@@ -24,38 +28,80 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "enabled": { "type": "boolean" },
+          "enabled": {
+            "type": "boolean"
+          },
           "dmPolicy": {
             "type": "string",
-            "enum": ["pairing", "allowlist", "open", "disabled"],
+            "enum": [
+              "pairing",
+              "allowlist",
+              "open",
+              "disabled"
+            ],
             "default": "pairing"
           },
           "allowFrom": {
             "type": "array",
-            "items": { "anyOf": [{ "type": "string" }, { "type": "number" }] }
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            }
           },
           "accounts": {
             "type": "object",
-            "propertyNames": { "type": "string" },
+            "propertyNames": {
+              "type": "string"
+            },
             "additionalProperties": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["token"],
+              "required": [
+                "token"
+              ],
               "properties": {
-                "enabled": { "type": "boolean" },
-                "token": { "type": "string" },
-                "botId": { "type": "string" },
+                "enabled": {
+                  "type": "boolean"
+                },
+                "token": {
+                  "type": "string"
+                },
+                "botId": {
+                  "type": "string"
+                },
                 "allowedUpdates": {
                   "type": "array",
-                  "items": { "type": "string" }
+                  "items": {
+                    "type": "string"
+                  }
                 },
                 "dmPolicy": {
                   "type": "string",
-                  "enum": ["pairing", "allowlist", "open", "disabled"]
+                  "enum": [
+                    "pairing",
+                    "allowlist",
+                    "open",
+                    "disabled"
+                  ]
                 },
                 "allowFrom": {
                   "type": "array",
-                  "items": { "anyOf": [{ "type": "string" }, { "type": "number" }] }
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  }
                 }
               }
             }
@@ -81,7 +127,7 @@
         },
         "accounts.*.token": {
           "label": "Max Bot Token",
-          "help": "Bot token issued by @MasterBot. Prefer secret or env substitution over an inline value.",
+          "help": "Bot token issued by @MasterBot. Stored as a plain string: this plugin does not resolve secret or env references yet.",
           "sensitive": true,
           "placeholder": "max-bot-token"
         },

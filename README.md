@@ -19,31 +19,30 @@ Connect your OpenClaw AI agents to Max Messenger — send and receive messages, 
 - **Per-sender agent routing** — route different users to different agents via `bindings`
 - **Tool: `max_send_file`** — registered tool that allows agents to send files from the filesystem
 
-## Prerequisites
+## Requirements
 
-- [OpenClaw](https://openclaw.ai) **2026.9.2 or newer**, installed and configured
-- Node 22.22.3+, 24.15+, or 25.9+
-- A Max Messenger bot token (obtained from the Master Bot in the Max app)
+| | |
+|---|---|
+| OpenClaw | **2026.9.2 or newer** |
+| Node | 22.22.3+, 24.15+, or 25.9+ |
+| Max bot token | from **@MasterBot** in the Max app |
+
+This plugin targets the 2026.9 plugin SDK. It will **not** load on OpenClaw older
+than 2026.9.2 — the narrow `openclaw/plugin-sdk/*` subpaths it imports do not
+exist there. See [CHANGELOG.md](CHANGELOG.md) for details.
 
 ## Installation
-
-Clone the repo and install dependencies:
 
 ```bash
 git clone https://github.com/alexeyavdey/openclaw-max-messenger.git
 cd openclaw-max-messenger
 npm install
-```
-
-Register the plugin with OpenClaw:
-
-```bash
 openclaw plugins install --link /path/to/openclaw-max-messenger
 ```
 
 ## Configuration
 
-Add the Max channel to your `~/.openclaw/openclaw.json`:
+Minimal working config in `~/.openclaw/openclaw.json`:
 
 ```json
 {
@@ -52,7 +51,8 @@ Add the Max channel to your `~/.openclaw/openclaw.json`:
       "enabled": true,
       "accounts": {
         "default": {
-          "token": "YOUR_BOT_TOKEN"
+          "token": "YOUR_BOT_TOKEN",
+          "dmPolicy": "pairing"
         }
       }
     }
@@ -66,9 +66,53 @@ Then restart the gateway:
 openclaw gateway restart
 ```
 
-### Access control
+Accounts are keyed by id. The key `default` is used whenever no account id is
+given, so a single-bot setup only ever needs `default`.
 
-Control who can interact with your bot using `dmPolicy`:
+## Read this before you go live
+
+Four things bite people setting this up. None of them produce an obvious error.
+
+### 1. Omitting `dmPolicy` disables access control entirely
+
+The access check runs only when `dmPolicy` is set to something other than
+`"open"`. If you leave the field out, **there is no allowlist and no pairing** —
+anyone who finds your bot talks to your agent, with whatever tools that agent
+has. The channel still reports `enabled, configured, running`, so nothing warns
+you.
+
+Always set `dmPolicy` explicitly. Start with `"pairing"`.
+
+### 2. Keep the plugin's `openclaw` devDependency equal to your gateway version
+
+Because the plugin is linked from its own directory, Node resolves
+`openclaw/plugin-sdk/*` from **this repo's** `node_modules` — not from the
+gateway's installation. If the two versions differ, two separate copies of the
+SDK run inside one process and fail in confusing ways at the boundary between
+them, while the channel still looks healthy from the outside.
+
+```bash
+openclaw --version
+node -p "require('./node_modules/openclaw/package.json').version"
+```
+
+Whenever you upgrade OpenClaw, re-run `npm install openclaw@<that version> --save-dev`.
+
+### 3. The token is a plain string
+
+`token` is read verbatim and handed to the Max Bot API client. OpenClaw's secret
+and env reference forms (`{"source": "env", ...}`) are **not** resolved by this
+plugin, so a reference object would be sent as-is and authentication would fail.
+Keep `~/.openclaw/openclaw.json` readable only by you.
+
+### 4. Bot chats look like groups
+
+Max treats bot conversations as group-style chats internally (`isGroup: true`).
+The plugin compensates: DM policy is applied to every chat regardless of the
+flag, and routing uses the sender id. Just don't be surprised when session keys
+read `max:group:...` for what is plainly a 1:1 conversation.
+
+## Access control
 
 ```json
 {
@@ -86,13 +130,14 @@ Control who can interact with your bot using `dmPolicy`:
 }
 ```
 
-**Policies:**
-
 | Policy | Behavior |
 |--------|----------|
-| `"open"` | Anyone can message the bot (default) |
-| `"allowlist"` | Only user IDs listed in `allowFrom` are allowed |
+| *(field omitted)* | **No gating at all** — see the warning above |
+| `"open"` | Anyone can message the bot |
+| `"allowlist"` | Only user ids listed in `allowFrom` are allowed |
 | `"pairing"` | New users receive a pairing code; owner approves via CLI |
+
+Entries in `allowFrom` may carry a `max:` prefix; it is stripped before matching.
 
 **Pairing flow:**
 
@@ -100,7 +145,29 @@ Control who can interact with your bot using `dmPolicy`:
 2. Owner approves: `openclaw pairing approve max <CODE>`
 3. User is added to the allow list and can now chat
 
-### Per-sender agent routing
+## Multiple bots
+
+Add one entry per bot. Each needs its own token:
+
+```json
+{
+  "channels": {
+    "max": {
+      "enabled": true,
+      "accounts": {
+        "default": { "token": "TOKEN_A", "dmPolicy": "pairing" },
+        "support": { "token": "TOKEN_B", "dmPolicy": "allowlist", "allowFrom": ["123456789"] }
+      }
+    }
+  }
+}
+```
+
+Multi-account outbound routing requires **v0.2.0 or newer**. Earlier versions
+resolved the account incorrectly and sent every outbound message through
+whichever bot happened to start first.
+
+## Per-sender agent routing
 
 Route different Max users to different OpenClaw agents:
 
@@ -127,18 +194,41 @@ Route different Max users to different OpenClaw agents:
 
 ## Getting a bot token
 
-1. Open Max Messenger app
+1. Open the Max Messenger app
 2. Find **Master Bot** (search for "Master Bot" or "@masterbot")
 3. Send `/newbot` and follow the instructions
-4. Copy the token and add it to your config
+4. Copy the token into your config
+
+## Verifying the setup
+
+```bash
+openclaw plugins info openclaw-max-messenger   # expect: Status: loaded
+openclaw channels status                       # expect: Max Messenger default: enabled, configured, running
+```
+
+After a gateway restart the log should contain, in order:
+
+```
+Max Messenger tool max_send_file registered
+[default] starting Max Messenger polling
+Max polling started for account "default"
+```
+
+The gateway log file path is printed by `openclaw gateway status` (`File logs: ...`).
+`openclaw channels dead-letters list --channel max` lists inbound events that
+failed to process.
+
+`openclaw plugins info` reports a provenance warning for link-installed plugins
+("OpenClaw can't verify where this plugin came from"). That is expected and does
+not block loading.
 
 ## Known issues
 
 - **Max Bot API SDK token bug**: The official `@maxhub/max-bot-api` SDK loses the upload token when uploading files via Buffer. This plugin works around it with a raw upload helper (`rawUpload`) that calls `getUploadUrl` + manual multipart upload. A patch for the SDK is included in `patches/`.
 
-- **Bot chats are groups**: Max treats bot conversations as group-style chats internally (`isGroup: true`). The plugin handles this transparently — access control and per-sender routing work correctly despite this quirk.
-
 - **Large file uploads**: Files over ~10MB may timeout depending on network conditions. The SDK has a 20-second upload timeout. For large files, consider compressing or splitting them.
+
+- **Deprecated inbound dispatch**: the plugin still calls `dispatchInboundReplyWithBase`, which the SDK marks deprecated. It keeps working until the next plugin-SDK major release.
 
 ## Project structure
 
@@ -146,7 +236,7 @@ Route different Max users to different OpenClaw agents:
 src/
   index.ts          — Channel plugin entry point (defineChannelPluginEntry)
   setup-entry.ts    — Setup-only entry loaded while the channel is unconfigured
-  channel.ts        — Channel definition (outbound, pairing, security, gateway)
+  channel.ts        — Channel definition (outbound, message adapter, pairing, security, gateway)
   inbound.ts        — Inbound message processing, access control, delivery
   polling.ts        — Max Bot API long-polling, event handling
   send-file-tool.ts — Agent tool for sending files
