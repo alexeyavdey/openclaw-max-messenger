@@ -1,5 +1,5 @@
 import { Bot } from "@maxhub/max-bot-api";
-import type { RuntimeEnv } from "openclaw/plugin-sdk";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { handleMaxInbound } from "./inbound.js";
 import { registerBot, unregisterBot } from "./registry.js";
 import { recordLastUsedContext } from "./send-file-tool.js";

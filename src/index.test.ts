@@ -1,12 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import plugin from "./index.js";
+import setupEntry from "./setup-entry.js";
 import { maxChannel } from "./channel.js";
 import { extractAttachments } from "./polling.js";
 import { clearRegistry } from "./registry.js";
+import { verifyChannelMessageReceiveAckPolicyAdapterProofs } from "openclaw/plugin-sdk/channel-outbound";
 
 describe("plugin object", () => {
   it("has correct id and name", () => {
-    expect(plugin.id).toBe("panty-max");
+    expect(plugin.id).toBe("openclaw-max-messenger");
     expect(plugin.name).toBe("Max Messenger");
   });
 
@@ -14,21 +16,32 @@ describe("plugin object", () => {
     expect(plugin.configSchema).toBeDefined();
   });
 
-  it("register calls registerChannel", () => {
+  it("register wires the channel and the tool in full mode", () => {
     const registerChannel = vi.fn();
+    const registerTool = vi.fn();
     const mockApi = {
+      registrationMode: "full",
       runtime: {
-        config: { loadConfig: vi.fn() },
+        config: { current: vi.fn() },
         channel: { routing: {}, session: {}, reply: {} },
       },
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
       registerChannel,
+      registerTool,
     } as any;
 
     plugin.register(mockApi);
 
-    expect(registerChannel).toHaveBeenCalledWith({
-      plugin: maxChannel,
-    });
+    expect(registerChannel).toHaveBeenCalledWith({ plugin: maxChannel });
+    expect(registerTool).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "max_send_file" }),
+    );
+  });
+});
+
+describe("setup entry", () => {
+  it("exposes the channel plugin without runtime wiring", () => {
+    expect(setupEntry.plugin).toBe(maxChannel);
   });
 });
 
@@ -99,20 +112,24 @@ describe("maxChannel", () => {
     });
 
     it("has direct delivery mode", () => {
-      expect(maxChannel.outbound.deliveryMode).toBe("direct");
+      expect(maxChannel.outbound?.deliveryMode).toBe("direct");
     });
 
     it("has sendMedia method", () => {
-      expect(maxChannel.outbound.sendMedia).toBeTypeOf("function");
+      expect(maxChannel.outbound?.sendMedia).toBeTypeOf("function");
+    });
+
+    it("exposes a message adapter for the shared core message tool", () => {
+      expect(maxChannel.message?.send).toBeDefined();
     });
 
     it("sendText throws when bot is not started", async () => {
       await expect(
-        maxChannel.outbound.sendText({
+        maxChannel.outbound!.sendText!({
+          cfg: { channels: { max: { accounts: { default: { token: "no-such-token" } } } } } as any,
+          to: "123",
           text: "hello",
           accountId: "default",
-          chatId: "123",
-          account: { token: "no-such-token" },
         })
       ).rejects.toThrow("Bot not started");
     });
@@ -128,31 +145,73 @@ describe("maxChannel", () => {
       registerBot("test-tok", mockBot);
 
       await expect(
-        maxChannel.outbound.sendMedia({
+        maxChannel.outbound!.sendMedia!({
+          cfg: { channels: { max: { accounts: { default: { token: "test-tok" } } } } } as any,
+          to: "123",
+          text: "",
           accountId: "default",
-          chatId: "123",
-          account: { token: "test-tok" },
-          type: "audio",
-          // no source, no url
+          // no mediaUrl
         })
-      ).rejects.toThrow('requires "source"');
+      ).rejects.toThrow("No media URL provided");
+    });
+  });
+
+  describe("message adapter", () => {
+    beforeEach(() => {
+      clearRegistry();
+    });
+
+    it("declares only ack policies it can prove", async () => {
+      const results = await verifyChannelMessageReceiveAckPolicyAdapterProofs({
+        adapterName: "max",
+        adapter: maxChannel.message!,
+        proofs: {
+          // Max long-polling exposes no provider-side ack: the plugin
+          // acknowledges by completing its own inbound handler.
+          manual: () => {
+            expect(maxChannel.message!.receive?.defaultAckPolicy).toBe("manual");
+          },
+        },
+      });
+      expect(results).toContainEqual({ policy: "manual", status: "verified" });
+    });
+
+    it("send.text delivers through the Max API and returns the platform message id", async () => {
+      const { registerBot } = await import("./registry.js");
+      const sendMessageToChat = vi.fn().mockResolvedValue({
+        body: { mid: "mid-42" },
+        timestamp: 1700000000,
+      });
+      registerBot("adapter-tok", { api: { sendMessageToChat } } as any);
+
+      const result = await maxChannel.message!.send!.text!({
+        cfg: { channels: { max: { accounts: { default: { token: "adapter-tok" } } } } } as any,
+        to: "max:777",
+        text: "hi",
+        accountId: "default",
+      });
+
+      expect(sendMessageToChat).toHaveBeenCalledWith(777, "hi");
+      expect(result.messageId).toBe("mid-42");
     });
   });
 
   describe("gateway", () => {
     it("has startAccount method", () => {
-      expect(maxChannel.gateway.startAccount).toBeTypeOf("function");
+      expect(maxChannel.gateway?.startAccount).toBeTypeOf("function");
     });
 
     it("startAccount throws when token is missing", async () => {
       const abortController = new AbortController();
       await expect(
-        maxChannel.gateway.startAccount({
-          cfg: {},
+        maxChannel.gateway!.startAccount!({
+          cfg: {} as any,
           accountId: "test",
           account: { token: "" },
-          runtime: {},
+          runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as any,
           abortSignal: abortController.signal,
+          getStatus: vi.fn() as any,
+          setStatus: vi.fn(),
         })
       ).rejects.toThrow("missing token");
     });

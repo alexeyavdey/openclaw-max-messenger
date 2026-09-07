@@ -21,7 +21,8 @@ Connect your OpenClaw AI agents to Max Messenger — send and receive messages, 
 
 ## Prerequisites
 
-- [OpenClaw](https://openclaw.ai) installed and configured
+- [OpenClaw](https://openclaw.ai) **2026.9.2 or newer**, installed and configured
+- Node 22.22.3+, 24.15+, or 25.9+
 - A Max Messenger bot token (obtained from the Master Bot in the Max app)
 
 ## Installation
@@ -143,7 +144,8 @@ Route different Max users to different OpenClaw agents:
 
 ```
 src/
-  index.ts          — Plugin registration entry point
+  index.ts          — Channel plugin entry point (defineChannelPluginEntry)
+  setup-entry.ts    — Setup-only entry loaded while the channel is unconfigured
   channel.ts        — Channel definition (outbound, pairing, security, gateway)
   inbound.ts        — Inbound message processing, access control, delivery
   polling.ts        — Max Bot API long-polling, event handling
@@ -157,6 +159,9 @@ src/
 ## Development
 
 ```bash
+# Typecheck
+npx tsc --noEmit
+
 # Run tests
 npm test
 

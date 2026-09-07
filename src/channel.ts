@@ -1,12 +1,22 @@
-import {
-  buildAccountScopedDmSecurityPolicy,
-} from "openclaw/plugin-sdk";
+import { buildAccountScopedDmSecurityPolicy } from "openclaw/plugin-sdk/channel-policy";
+import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-outbound";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { getApi as getApiFromRegistry, getAllBots } from "./registry.js";
 import { startPolling, stopPolling } from "./polling.js";
 import { rawUpload, resolveUploadType, stripMaxPrefix } from "./upload-file.js";
-import type { MaxAccountConfig, MaxChannelsConfig, MaxOutboundContext } from "./types.js";
+import type { MaxAccountConfig, MaxChannelsConfig, MaxSendContext, MaxSendResult } from "./types.js";
 
 const DEFAULT_ACCOUNT_ID = "default";
+
+function readAccounts(cfg: unknown): Record<string, MaxAccountConfig> {
+  return (cfg as MaxChannelsConfig)?.channels?.max?.accounts ?? {};
+}
+
+function findAccount(cfg: unknown, accountId?: string | null): MaxAccountConfig | undefined {
+  const id = accountId ?? DEFAULT_ACCOUNT_ID;
+  const account = readAccounts(cfg)[id];
+  return account ? { ...account, accountId: id } : undefined;
+}
 
 function requireApi(account: MaxAccountConfig | undefined) {
   if (account?.token) {
@@ -20,7 +30,83 @@ function requireApi(account: MaxAccountConfig | undefined) {
   throw new Error("Bot not started — no API available");
 }
 
-export const maxChannel = {
+// Outbound contexts carry cfg + accountId, never a resolved account object.
+function requireApiFor(cfg: unknown, accountId?: string | null) {
+  return requireApi(findAccount(cfg, accountId));
+}
+
+function resolveChatId(to: string | undefined): number {
+  const chatId = Number(stripMaxPrefix(String(to ?? "")));
+  if (!Number.isFinite(chatId)) {
+    throw new Error(`Invalid Max target "${to}"`);
+  }
+  return chatId;
+}
+
+async function sendMaxText(ctx: MaxSendContext): Promise<MaxSendResult> {
+  const api = requireApiFor(ctx.cfg, ctx.accountId);
+  const chatId = resolveChatId(ctx.to);
+
+  if (ctx.messageId) {
+    await api.editMessage(ctx.messageId, { text: ctx.text });
+    return {
+      channel: "max",
+      messageId: ctx.messageId,
+      target: { kind: "chat", id: String(chatId) },
+    };
+  }
+
+  const sent = await api.sendMessageToChat(chatId, ctx.text);
+  return {
+    channel: "max",
+    messageId: sent.body.mid,
+    target: { kind: "chat", id: String(chatId) },
+    timestamp: sent.timestamp,
+  };
+}
+
+async function sendMaxMedia(ctx: MaxSendContext & { mediaUrl?: string }): Promise<MaxSendResult> {
+  const api = requireApiFor(ctx.cfg, ctx.accountId);
+  const chatId = resolveChatId(ctx.to);
+
+  const mediaUrl = ctx.mediaUrl;
+  if (!mediaUrl) {
+    throw new Error("No media URL provided");
+  }
+
+  const isLocalPath = mediaUrl.startsWith("/");
+  const urlPath = mediaUrl.split("?")[0];
+  const filename = urlPath.split("/").pop() || "file";
+  const ext = filename.includes(".") ? filename.split(".").pop()?.toLowerCase() : "";
+
+  // For local files pass path (preserves filename), for URLs pass buffer
+  let contentType = "";
+  const source: string | Buffer = isLocalPath ? mediaUrl : await (async () => {
+    const res = await fetch(mediaUrl);
+    if (!res.ok) throw new Error(`Failed to download media: ${res.status}`);
+    contentType = res.headers.get("content-type") || "";
+    return Buffer.from(await res.arrayBuffer());
+  })();
+
+  const uploadType = resolveUploadType(ext ?? "", contentType);
+
+  // Use rawUpload for all types to avoid SDK token bugs with Buffer sources
+  const attachment = await rawUpload(api, uploadType, source, filename);
+  const sent = await api.sendMessageToChat(
+    chatId,
+    ctx.text ?? (uploadType === "file" ? filename : ""),
+    { attachments: [attachment] },
+  );
+
+  return {
+    channel: "max",
+    messageId: sent.body.mid,
+    target: { kind: "chat", id: String(chatId) },
+    timestamp: sent.timestamp,
+  };
+}
+
+export const maxChannel: ChannelPlugin<MaxAccountConfig> = {
   id: "max",
 
   meta: {
@@ -33,7 +119,7 @@ export const maxChannel = {
   },
 
   capabilities: {
-    chatTypes: ["direct", "group"] as const,
+    chatTypes: ["direct", "group"],
     media: true,
     reactions: false,
     edit: true,
@@ -41,10 +127,14 @@ export const maxChannel = {
     reply: true,
   },
 
+  reload: {
+    configPrefixes: ["channels.max"],
+  },
+
   pairing: {
     idLabel: "maxUserId",
     normalizeAllowEntry: (entry: string) => stripMaxPrefix(entry),
-    notifyApproval: async ({ id }: { cfg: unknown; id: string; runtime?: unknown }) => {
+    notifyApproval: async ({ id }) => {
       const bots = getAllBots();
       const bot = bots.find(b => b.api !== undefined);
       if (bot) {
@@ -58,9 +148,9 @@ export const maxChannel = {
   },
 
   security: {
-    resolveDmPolicy: ({ cfg, accountId, account }: { cfg: unknown; accountId?: string | null; account: MaxAccountConfig }) => {
+    resolveDmPolicy: ({ cfg, accountId, account }) => {
       return buildAccountScopedDmSecurityPolicy({
-        cfg: cfg as Record<string, unknown>,
+        cfg: cfg as unknown as Record<string, unknown>,
         channelKey: "max",
         accountId,
         fallbackAccountId: account.accountId ?? DEFAULT_ACCOUNT_ID,
@@ -72,94 +162,60 @@ export const maxChannel = {
   },
 
   config: {
-    listAccountIds: (cfg: MaxChannelsConfig): string[] =>
-      Object.keys(cfg.channels?.max?.accounts ?? {}),
+    listAccountIds: (cfg) => Object.keys(readAccounts(cfg)),
 
-    resolveAccount: (
-      cfg: MaxChannelsConfig,
-      accountId?: string
-    ): MaxAccountConfig => {
+    resolveAccount: (cfg, accountId) => {
       const id = accountId ?? DEFAULT_ACCOUNT_ID;
-      const account = cfg.channels?.max?.accounts?.[id];
+      const account = findAccount(cfg, id);
       if (!account) {
         throw new Error(`Max account "${id}" not found in configuration`);
       }
-      return { ...account, accountId: id };
+      return account;
     },
+
+    // Diagnostics surface: same fields as resolveAccount minus the token.
+    inspectAccount: (cfg, accountId) => {
+      const id = accountId ?? DEFAULT_ACCOUNT_ID;
+      const account = findAccount(cfg, id);
+      return {
+        accountId: id,
+        present: Boolean(account),
+        configured: Boolean(account?.token),
+        botId: account?.botId,
+        dmPolicy: account?.dmPolicy,
+        allowFromCount: account?.allowFrom?.length ?? 0,
+      };
+    },
+
+    isConfigured: (account) => Boolean(account?.token),
+    unconfiguredReason: () => "Max bot token is not set",
   },
 
   outbound: {
-    deliveryMode: "direct" as const,
+    deliveryMode: "direct",
 
-    resolveTarget: (params: { to?: string; cfg?: unknown; accountId?: string }) => {
-      const to = params.to?.trim();
-      if (!to) return { ok: false, error: new Error("No target specified") };
+    resolveTarget: ({ to }) => {
+      const trimmed = to?.trim();
+      if (!trimmed) return { ok: false, error: new Error("No target specified") };
       // Strip channel prefix: "max:226805445" → "226805445"
-      const stripped = stripMaxPrefix(to);
-      return { ok: true, to: stripped };
+      return { ok: true, to: stripMaxPrefix(trimmed) };
     },
 
-    sendText: async (ctx: MaxOutboundContext) => {
-      const api = requireApi(ctx.account);
-      // ctx.chatId or ctx.to may contain "max:123" prefix
-      const rawId = ctx.chatId ?? (ctx as unknown as Record<string, unknown>).to as string ?? "";
-      const chatId = Number(stripMaxPrefix(String(rawId)));
-
-      if (ctx.messageId) {
-        await api.editMessage(ctx.messageId, { text: ctx.text });
-      } else {
-        await api.sendMessageToChat(chatId, ctx.text);
-      }
-
-      return { ok: true };
-    },
-
-    sendMedia: async (ctx: Record<string, unknown>) => {
-      const api = requireApi(ctx.account as MaxAccountConfig);
-      const rawId = (ctx.chatId ?? ctx.to ?? "") as string;
-      const chatId = Number(stripMaxPrefix(String(rawId)));
-
-      // OpenClaw passes mediaUrl — can be a URL or a local file path
-      const mediaUrl = (ctx.mediaUrl ?? ctx.url) as string | undefined;
-      if (!mediaUrl) {
-        throw new Error("No media URL provided");
-      }
-
-      const isLocalPath = mediaUrl.startsWith("/");
-      const urlPath = mediaUrl.split("?")[0];
-      const filename = urlPath.split("/").pop() || "file";
-      const ext = filename.includes(".") ? filename.split(".").pop()?.toLowerCase() : "";
-
-      // For local files pass path (preserves filename), for URLs pass buffer
-      let contentType = "";
-      const source: string | Buffer = isLocalPath ? mediaUrl : await (async () => {
-        const res = await fetch(mediaUrl);
-        if (!res.ok) throw new Error(`Failed to download media: ${res.status}`);
-        contentType = res.headers.get("content-type") || "";
-        return Buffer.from(await res.arrayBuffer());
-      })();
-
-      const uploadType = resolveUploadType(ext ?? "", contentType);
-
-      // Use rawUpload for all types to avoid SDK token bugs with Buffer sources
-      const attachment = await rawUpload(api, uploadType, source, filename);
-      await api.sendMessageToChat(chatId, (ctx.text as string) ?? (uploadType === "file" ? filename : ""), {
-        attachments: [attachment],
-      });
-
-      return { ok: true };
-    },
+    sendText: (ctx) => sendMaxText(ctx as MaxSendContext),
+    sendMedia: (ctx) => sendMaxMedia(ctx as MaxSendContext & { mediaUrl?: string }),
   },
 
+  // Core drives its shared message tool through this adapter.
+  message: createChannelMessageAdapterFromOutbound({
+    id: "max",
+    outbound: {
+      sendText: (ctx) => sendMaxText(ctx as unknown as MaxSendContext),
+      sendMedia: (ctx) => sendMaxMedia(ctx as unknown as MaxSendContext & { mediaUrl?: string }),
+    },
+  }),
+
   gateway: {
-    startAccount: async (ctx: {
-      cfg: Record<string, unknown>;
-      accountId: string;
-      account: MaxAccountConfig;
-      runtime: { log?: (msg: string) => void; error?: (msg: string) => void };
-      abortSignal: AbortSignal;
-      log?: { info: (...args: unknown[]) => void; warn: (...args: unknown[]) => void; error: (...args: unknown[]) => void };
-    }) => {
+    startAccount: async (ctx) => {
       const { accountId, account, runtime, abortSignal } = ctx;
 
       if (!account.token) {
@@ -168,21 +224,21 @@ export const maxChannel = {
         );
       }
 
-      ctx.log?.info(`[${accountId}] starting Max Messenger polling`);
+      ctx.log?.info?.(`[${accountId}] starting Max Messenger polling`);
 
-      const logger: import("./types.js").PluginLogger = ctx.log
-        ? { ...ctx.log, debug: (ctx.log as Record<string, unknown>).debug as ((...args: unknown[]) => void) ?? (() => {}) }
-        : {
-            info: (...args: unknown[]) => runtime.log?.(String(args.join(" "))),
-            warn: (...args: unknown[]) => runtime.log?.(String(args.join(" "))),
-            error: (...args: unknown[]) => runtime.error?.(String(args.join(" "))),
-            debug: () => {},
-          };
+      const log = ctx.log;
+      const join = (args: unknown[]) => args.map(String).join(" ");
+      const logger: import("./types.js").PluginLogger = {
+        info: (...args) => (log ? log.info(join(args)) : runtime.log?.(join(args))),
+        warn: (...args) => (log ? log.warn(join(args)) : runtime.log?.(join(args))),
+        error: (...args) => (log ? log.error(join(args)) : runtime.error?.(join(args))),
+        debug: (...args) => log?.debug?.(join(args)),
+      };
 
       await startPolling({
         accounts: { [accountId]: account },
         logger,
-        runtime: runtime as import("openclaw/plugin-sdk").RuntimeEnv,
+        runtime,
       });
 
       // Keep the promise pending until abort signal fires
@@ -201,6 +257,10 @@ export const maxChannel = {
           { once: true },
         );
       });
+    },
+
+    stopAccount: async () => {
+      stopPolling();
     },
   },
 };

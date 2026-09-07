@@ -1,17 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { dispatchInboundReplyWithBase } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import {
-  dispatchInboundReplyWithBase,
   resolveOutboundMediaUrls,
-  resolveDmGroupAccessWithLists,
-  issuePairingChallenge,
-  createScopedPairingAccess,
   type OutboundReplyPayload,
-  type OpenClawConfig,
-  type RuntimeEnv,
-  type PluginRuntime,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/reply-payload";
+import { resolveDmGroupAccessWithLists } from "openclaw/plugin-sdk/channel-policy";
+import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { getMaxRuntime } from "./runtime.js";
 import { getApi } from "./registry.js";
 import { rawUpload, resolveUploadType, stripMaxPrefix } from "./upload-file.js";
@@ -142,7 +141,7 @@ export async function handleMaxInbound(params: {
     return;
   }
 
-  const cfg = core.config.loadConfig() as OpenClawConfig;
+  const cfg = core.config.current() as OpenClawConfig;
   const isGroup = message.isGroup ?? false;
   const senderId = message.userId;
   const senderName = message.displayName ?? message.username ?? senderId;
@@ -152,7 +151,7 @@ export async function handleMaxInbound(params: {
   // Max bots live in group-style chats, so apply policy regardless of isGroup
   const dmPolicy = account.dmPolicy;
   if (dmPolicy && dmPolicy !== "open") {
-    const pairing = createScopedPairingAccess({
+    const pairing = createChannelPairingController({
       core,
       channel: CHANNEL_ID,
       accountId,
@@ -175,15 +174,10 @@ export async function handleMaxInbound(params: {
 
     if (decision === "pairing") {
       const api = getApi(account.token);
-      await issuePairingChallenge({
-        channel: CHANNEL_ID,
+      // channel, accountId and the store writer are pre-bound by the controller.
+      await pairing.issueChallenge({
         senderId: String(senderId),
         senderIdLine: `maxUserId: ${senderId}`,
-        upsertPairingRequest: (params: { id: string; meta?: Record<string, string | null | undefined> }) =>
-          pairing.upsertPairingRequest({
-            id: params.id,
-            meta: params.meta,
-          }),
         sendPairingReply: async (text: string) => {
           if (api) {
             await api.sendMessageToChat(Number(chatId), text);

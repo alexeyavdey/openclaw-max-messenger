@@ -42,6 +42,7 @@ export const sendFileTool = {
     if (!filePath) {
       return {
         content: [{ type: "text" as const, text: "Error: file_path is required" }],
+        details: { ok: false, reason: "missing_file_path" },
       };
     }
 
@@ -49,6 +50,7 @@ export const sendFileTool = {
     if (!resolved) {
       return {
         content: [{ type: "text" as const, text: "Error: no active chat context — cannot determine where to send the file" }],
+        details: { ok: false, reason: "no_chat_context" },
       };
     }
 
@@ -67,10 +69,12 @@ export const sendFileTool = {
 
       return {
         content: [{ type: "text" as const, text: `File sent: ${filename} (${fileSize} bytes)` }],
+        details: { ok: true, filename, fileSize, uploadType, chatId },
       };
     } catch (err) {
       return {
         content: [{ type: "text" as const, text: `Error sending file: ${String(err)}` }],
+        details: { ok: false, reason: "send_failed", error: String(err) },
       };
     }
   },

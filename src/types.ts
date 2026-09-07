@@ -15,13 +15,21 @@ export interface MaxChannelsConfig {
   };
 }
 
-export interface MaxOutboundContext {
+/** Shape shared by the outbound adapter and the channel message adapter. */
+export interface MaxSendContext {
+  cfg: unknown;
+  to: string;
   text: string;
-  accountId: string;
-  chatId: string;
-  userId?: string;
+  accountId?: string | null;
   messageId?: string;
-  account: MaxAccountConfig;
+}
+
+/** Delivery receipt shape required by OutboundDeliveryResult. */
+export interface MaxSendResult {
+  channel: "max";
+  messageId: string;
+  target?: { kind: "chat"; id: string };
+  timestamp?: number;
 }
 
 export type MediaType = "image" | "video" | "audio" | "file";

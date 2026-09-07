@@ -1,25 +1,34 @@
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import { defineChannelPluginEntry } from "openclaw/plugin-sdk/channel-core";
+import type { OpenClawPluginApi, PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { maxChannel } from "./channel.js";
 import { setMaxRuntime } from "./runtime.js";
 import { sendFileTool } from "./send-file-tool.js";
 
-const plugin = {
+// Spelled out because the entry's inferred type names an internal SDK chunk,
+// which `declaration: true` cannot emit.
+type MaxPluginEntry = {
+  id: string;
+  name: string;
+  description: string;
+  configSchema: unknown;
+  register: (api: OpenClawPluginApi) => void;
+  channelPlugin: typeof maxChannel;
+  setChannelRuntime?: (runtime: PluginRuntime) => void;
+};
+
+const entry: MaxPluginEntry = defineChannelPluginEntry({
   id: "openclaw-max-messenger",
   name: "Max Messenger",
   description: "Max Messenger channel plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
-    api.logger.info("Max Messenger plugin registering...");
-    setMaxRuntime(api.runtime);
-    api.registerChannel({ plugin: maxChannel as never });
-    api.logger.info("Max Messenger channel registered");
-    api.registerTool(sendFileTool as never);
+  plugin: maxChannel,
+  setRuntime: setMaxRuntime,
+  registerFull(api) {
+    api.registerTool(sendFileTool);
     api.logger.info("Max Messenger tool max_send_file registered");
   },
-};
+});
 
-export default plugin;
+export default entry;
 
 export { maxChannel } from "./channel.js";
 export { startPolling, stopPolling } from "./polling.js";
@@ -29,7 +38,8 @@ export { handleMaxInbound } from "./inbound.js";
 export type {
   MaxAccountConfig,
   MaxChannelsConfig,
-  MaxOutboundContext,
+  MaxSendContext,
+  MaxSendResult,
   MaxMediaContext,
   MediaType,
   InboundAttachment,

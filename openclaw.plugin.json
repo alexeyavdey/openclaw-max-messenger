@@ -1,17 +1,101 @@
 {
   "id": "openclaw-max-messenger",
   "name": "Max Messenger",
-  "version": "0.1.0",
   "description": "Channel plugin for Max Messenger (max.ru) via Bot API",
   "author": "alexonic",
-  "engines": {
-    "openclaw": ">=0.1.0"
+  "activation": {
+    "onStartup": false
   },
-  "extensions": ["./src/index.ts"],
   "channels": ["max"],
+  "contracts": {
+    "tools": ["max_send_file"]
+  },
   "configSchema": {
     "type": "object",
-    "properties": {},
-    "additionalProperties": false
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "channelConfigs": {
+    "max": {
+      "label": "Max Messenger",
+      "description": "Max messenger bot integration over the Bot API. Register a bot with @MasterBot and paste its token.",
+      "schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "dmPolicy": {
+            "type": "string",
+            "enum": ["pairing", "allowlist", "open", "disabled"],
+            "default": "pairing"
+          },
+          "allowFrom": {
+            "type": "array",
+            "items": { "anyOf": [{ "type": "string" }, { "type": "number" }] }
+          },
+          "accounts": {
+            "type": "object",
+            "propertyNames": { "type": "string" },
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["token"],
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "token": { "type": "string" },
+                "botId": { "type": "string" },
+                "allowedUpdates": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                },
+                "dmPolicy": {
+                  "type": "string",
+                  "enum": ["pairing", "allowlist", "open", "disabled"]
+                },
+                "allowFrom": {
+                  "type": "array",
+                  "items": { "anyOf": [{ "type": "string" }, { "type": "number" }] }
+                }
+              }
+            }
+          }
+        }
+      },
+      "uiHints": {
+        "": {
+          "label": "Max Messenger",
+          "help": "Max messenger channel configuration. Accounts are keyed by account id; \"default\" is used when no account is specified."
+        },
+        "dmPolicy": {
+          "label": "Max DM Policy",
+          "help": "Direct message access control (\"pairing\" recommended). \"open\" requires allowFrom=[\"*\"]."
+        },
+        "allowFrom": {
+          "label": "Max Allowed Senders",
+          "help": "Max user ids allowed to talk to the bot. Entries may carry a \"max:\" prefix."
+        },
+        "accounts": {
+          "label": "Max Accounts",
+          "help": "One entry per Max bot. The \"default\" key is used when no account id is given."
+        },
+        "accounts.*.token": {
+          "label": "Max Bot Token",
+          "help": "Bot token issued by @MasterBot. Prefer secret or env substitution over an inline value.",
+          "sensitive": true,
+          "placeholder": "max-bot-token"
+        },
+        "accounts.*.botId": {
+          "label": "Max Bot Id",
+          "help": "Numeric bot id, used to ignore the bot's own messages.",
+          "advanced": true
+        },
+        "accounts.*.allowedUpdates": {
+          "label": "Max Allowed Updates",
+          "help": "Update types requested from the Bot API long-poll loop.",
+          "advanced": true
+        }
+      }
+    }
   }
 }
