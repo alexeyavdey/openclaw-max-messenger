@@ -1,6 +1,6 @@
 {
   "name": "openclaw-max-messenger",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "OpenClaw channel plugin for Max Messenger (max.ru) — connect AI agents to Max via Bot API",
   "type": "module",
   "main": "./src/index.ts",

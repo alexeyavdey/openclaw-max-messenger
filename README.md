@@ -14,7 +14,6 @@ Connect your OpenClaw AI agents to Max Messenger — send and receive messages, 
 - **Media from URLs** — automatically downloads and re-uploads media from external URLs
 - **Local file paths** — agent can reference local files by absolute path, plugin sends them as attachments
 - **Inbound attachments** — files sent by users are downloaded and saved for the agent to process
-- **Message editing** — supports editing previously sent messages
 - **Access control** — `allowlist` and `pairing` policies to control who can talk to the bot
 - **Per-sender agent routing** — route different users to different agents via `bindings`
 - **Tool: `max_send_file`** — registered tool that allows agents to send files from the filesystem
@@ -73,15 +72,17 @@ given, so a single-bot setup only ever needs `default`.
 
 Four things bite people setting this up. None of them produce an obvious error.
 
-### 1. Omitting `dmPolicy` disables access control entirely
+### 1. An unset `dmPolicy` now means pairing, not open
 
-The access check runs only when `dmPolicy` is set to something other than
-`"open"`. If you leave the field out, **there is no allowlist and no pairing** —
-anyone who finds your bot talks to your agent, with whatever tools that agent
-has. The channel still reports `enabled, configured, running`, so nothing warns
-you.
+Up to v0.3.0 the access check ran only when `dmPolicy` was set, so leaving the
+field out meant **no allowlist and no pairing** — anyone who found the bot
+reached the agent, while the channel still reported itself as pairing-gated.
 
-Always set `dmPolicy` explicitly. Start with `"pairing"`.
+From v0.4.0 an unset `dmPolicy` is treated as `"pairing"`, matching what the
+channel already reported to OpenClaw. **If you upgrade with no `dmPolicy` in
+your config, existing users will have to pair before the bot answers them
+again.** Set `dmPolicy: "open"` explicitly if you really want an ungated bot,
+and understand that it means what it says.
 
 ### 2. Keep the plugin's `openclaw` devDependency equal to your gateway version
 
@@ -132,7 +133,7 @@ read `max:group:...` for what is plainly a 1:1 conversation.
 
 | Policy | Behavior |
 |--------|----------|
-| *(field omitted)* | **No gating at all** — see the warning above |
+| *(field omitted)* | Same as `"pairing"` |
 | `"open"` | Anyone can message the bot |
 | `"allowlist"` | Only user ids listed in `allowFrom` are allowed |
 | `"pairing"` | New users receive a pairing code; owner approves via CLI |
@@ -226,6 +227,8 @@ not block loading.
 
 - **Max Bot API SDK token bug**: The official `@maxhub/max-bot-api` SDK loses the upload token when uploading files via Buffer. This plugin works around it with a raw upload helper (`rawUpload`) that calls `getUploadUrl` + manual multipart upload. A patch for the SDK is included in `patches/`.
 
+- **Local media is confined to the agent's media roots**: outbound sends read local files only through the reader OpenClaw supplies, or from inside the roots it allows. A path outside them is refused rather than uploaded, so an agent cannot be talked into attaching an arbitrary file from the host.
+
 - **Large file uploads**: Files over ~10MB may timeout depending on network conditions. The SDK has a 20-second upload timeout. For large files, consider compressing or splitting them.
 
 - **Deprecated inbound dispatch**: the plugin still calls `dispatchInboundReplyWithBase`, which the SDK marks deprecated. It keeps working until the next plugin-SDK major release.
@@ -240,6 +243,7 @@ src/
   inbound.ts        — Inbound message processing, access control, delivery
   polling.ts        — Max Bot API long-polling, event handling
   send-file-tool.ts — Agent tool for sending files
+  media-access.ts   — Local-media confinement and SSRF-guarded remote fetch
   upload-file.ts    — Raw upload helper, media type detection, utilities
   registry.ts       — Bot instance registry
   runtime.ts        — Plugin runtime store

@@ -1,9 +1,11 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import plugin from "./index.js";
 import setupEntry from "./setup-entry.js";
 import { maxChannel } from "./channel.js";
 import { extractAttachments } from "./polling.js";
 import { clearRegistry } from "./registry.js";
+import { clearMaxRuntime } from "./runtime.js";
+import { isPathInsideRoots } from "./media-access.js";
 import { verifyChannelMessageReceiveAckPolicyAdapterProofs } from "openclaw/plugin-sdk/channel-outbound";
 
 describe("plugin object", () => {
@@ -39,6 +41,12 @@ describe("plugin object", () => {
   });
 });
 
+afterEach(() => {
+  // The runtime store is a process-global slot, so a stub installed by one
+  // test would otherwise stay visible to every later test and module instance.
+  clearMaxRuntime();
+});
+
 describe("setup entry", () => {
   it("exposes the channel plugin without runtime wiring", () => {
     expect(setupEntry.plugin).toBe(maxChannel);
@@ -60,9 +68,10 @@ describe("maxChannel", () => {
       expect(maxChannel.capabilities.chatTypes).toContain("group");
     });
 
-    it("supports media and edit but not threads/reactions", () => {
+    it("supports media but not edit/threads/reactions", () => {
       expect(maxChannel.capabilities.media).toBe(true);
-      expect(maxChannel.capabilities.edit).toBe(true);
+      // No adapter core could call to perform an edit, so it must not claim one.
+      expect(maxChannel.capabilities.edit).toBe(false);
       expect(maxChannel.capabilities.threads).toBe(false);
       expect(maxChannel.capabilities.reactions).toBe(false);
     });
@@ -123,7 +132,7 @@ describe("maxChannel", () => {
       expect(maxChannel.message?.send).toBeDefined();
     });
 
-    it("sendText throws when bot is not started", async () => {
+    it("sendText throws when the account's bot is not running", async () => {
       await expect(
         maxChannel.outbound!.sendText!({
           cfg: { channels: { max: { accounts: { default: { token: "no-such-token" } } } } } as any,
@@ -131,7 +140,46 @@ describe("maxChannel", () => {
           text: "hello",
           accountId: "default",
         })
-      ).rejects.toThrow("Bot not started");
+      ).rejects.toThrow('Max bot for account "default" is not running');
+    });
+
+    it("never falls back to another account's bot", async () => {
+      const { registerBot } = await import("./registry.js");
+      const sendMessageToChat = vi.fn();
+      registerBot("tok-a", { api: { sendMessageToChat } } as any);
+
+      const cfg = {
+        channels: {
+          max: {
+            accounts: {
+              default: { token: "tok-a" },
+              second: { token: "tok-b" },
+            },
+          },
+        },
+      } as any;
+
+      await expect(
+        maxChannel.outbound!.sendText!({ cfg, to: "123", text: "hi", accountId: "second" })
+      ).rejects.toThrow('Max bot for account "second" is not running');
+      expect(sendMessageToChat).not.toHaveBeenCalled();
+    });
+
+    it("rejects targets that are not a usable chat id", async () => {
+      const { registerBot } = await import("./registry.js");
+      registerBot("tok-c", { api: { sendMessageToChat: vi.fn() } } as any);
+      const cfg = {
+        channels: { max: { accounts: { default: { token: "tok-c" } } } },
+      } as any;
+
+      // Number("") is 0, which passes a naive isFinite check.
+      await expect(
+        maxChannel.outbound!.sendText!({ cfg, to: "max:", text: "hi", accountId: "default" })
+      ).rejects.toThrow("empty chat id");
+
+      await expect(
+        maxChannel.outbound!.sendText!({ cfg, to: "12.5", text: "hi", accountId: "default" })
+      ).rejects.toThrow("must be an integer");
     });
 
     it("sendMedia throws when source is missing for non-image types", async () => {
@@ -193,6 +241,22 @@ describe("maxChannel", () => {
 
       expect(sendMessageToChat).toHaveBeenCalledWith(777, "hi");
       expect(result.messageId).toBe("mid-42");
+    });
+  });
+
+  describe("media access", () => {
+    it("confines local media to the roots the host allows", () => {
+      const roots = ["/tmp/media"];
+      expect(isPathInsideRoots("/tmp/media/photo.png", roots)).toBe(true);
+      expect(isPathInsideRoots("/tmp/media", roots)).toBe(true);
+      // Prefix match alone would wrongly accept a sibling directory.
+      expect(isPathInsideRoots("/tmp/media-other/secret", roots)).toBe(false);
+      expect(isPathInsideRoots("/tmp/media/../../etc/passwd", roots)).toBe(false);
+      expect(isPathInsideRoots("/Users/me/.openclaw/openclaw.json", roots)).toBe(false);
+    });
+
+    it("refuses every local path when no roots are provided", () => {
+      expect(isPathInsideRoots("/tmp/anything", [])).toBe(false);
     });
   });
 

@@ -34,16 +34,6 @@ export interface MaxSendResult {
 
 export type MediaType = "image" | "video" | "audio" | "file";
 
-export interface MaxMediaContext {
-  accountId: string;
-  chatId: string;
-  account: MaxAccountConfig;
-  type: MediaType;
-  url?: string;
-  source?: string | Buffer;
-  text?: string;
-}
-
 export interface InboundAttachment {
   type: MediaType | "sticker" | "contact" | "location" | "share";
   url?: string;

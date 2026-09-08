@@ -1,10 +1,16 @@
 import { buildAccountScopedDmSecurityPolicy } from "openclaw/plugin-sdk/channel-policy";
 import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-outbound";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
-import { getApi as getApiFromRegistry, getAllBots } from "./registry.js";
+import { getApi as getApiFromRegistry } from "./registry.js";
 import { startPolling, stopPolling } from "./polling.js";
 import { rawUpload, resolveUploadType, stripMaxPrefix } from "./upload-file.js";
-import type { MaxAccountConfig, MaxChannelsConfig, MaxSendContext, MaxSendResult } from "./types.js";
+import { fetchRemoteMedia, readLocalMedia, type MediaAccessContext } from "./media-access.js";
+import type {
+  MaxAccountConfig,
+  MaxChannelsConfig,
+  MaxSendContext,
+  MaxSendResult,
+} from "./types.js";
 
 const DEFAULT_ACCOUNT_ID = "default";
 
@@ -18,27 +24,33 @@ function findAccount(cfg: unknown, accountId?: string | null): MaxAccountConfig 
   return account ? { ...account, accountId: id } : undefined;
 }
 
-function requireApi(account: MaxAccountConfig | undefined) {
-  if (account?.token) {
-    const api = getApiFromRegistry(account.token);
-    if (api) return api;
-  }
-  const allBots = getAllBots();
-  if (allBots.length > 0) {
-    return allBots[0].api;
-  }
-  throw new Error("Bot not started — no API available");
-}
-
-// Outbound contexts carry cfg + accountId, never a resolved account object.
+/**
+ * Resolve the bot for one account. There is deliberately no "use whichever bot
+ * started first" fallback: it silently sends from the wrong account whenever a
+ * poll loop is down or a token was rotated.
+ */
 function requireApiFor(cfg: unknown, accountId?: string | null) {
-  return requireApi(findAccount(cfg, accountId));
+  const id = accountId ?? DEFAULT_ACCOUNT_ID;
+  const account = findAccount(cfg, id);
+  if (!account?.token) {
+    throw new Error(`Max account "${id}" is not configured`);
+  }
+  const api = getApiFromRegistry(account.token);
+  if (!api) {
+    throw new Error(`Max bot for account "${id}" is not running`);
+  }
+  return api;
 }
 
 function resolveChatId(to: string | undefined): number {
-  const chatId = Number(stripMaxPrefix(String(to ?? "")));
-  if (!Number.isFinite(chatId)) {
-    throw new Error(`Invalid Max target "${to}"`);
+  const raw = stripMaxPrefix(String(to ?? "").trim()).trim();
+  if (!raw) {
+    throw new Error(`Invalid Max target "${to}": empty chat id`);
+  }
+  const chatId = Number(raw);
+  // Number("") is 0 and Number("1.5") is finite, so neither check is redundant.
+  if (!Number.isSafeInteger(chatId)) {
+    throw new Error(`Invalid Max target "${to}": chat id must be an integer`);
   }
   return chatId;
 }
@@ -46,15 +58,6 @@ function resolveChatId(to: string | undefined): number {
 async function sendMaxText(ctx: MaxSendContext): Promise<MaxSendResult> {
   const api = requireApiFor(ctx.cfg, ctx.accountId);
   const chatId = resolveChatId(ctx.to);
-
-  if (ctx.messageId) {
-    await api.editMessage(ctx.messageId, { text: ctx.text });
-    return {
-      channel: "max",
-      messageId: ctx.messageId,
-      target: { kind: "chat", id: String(chatId) },
-    };
-  }
 
   const sent = await api.sendMessageToChat(chatId, ctx.text);
   return {
@@ -65,7 +68,9 @@ async function sendMaxText(ctx: MaxSendContext): Promise<MaxSendResult> {
   };
 }
 
-async function sendMaxMedia(ctx: MaxSendContext & { mediaUrl?: string }): Promise<MaxSendResult> {
+async function sendMaxMedia(
+  ctx: MaxSendContext & { mediaUrl?: string } & MediaAccessContext,
+): Promise<MaxSendResult> {
   const api = requireApiFor(ctx.cfg, ctx.accountId);
   const chatId = resolveChatId(ctx.to);
 
@@ -74,19 +79,19 @@ async function sendMaxMedia(ctx: MaxSendContext & { mediaUrl?: string }): Promis
     throw new Error("No media URL provided");
   }
 
-  const isLocalPath = mediaUrl.startsWith("/");
   const urlPath = mediaUrl.split("?")[0];
   const filename = urlPath.split("/").pop() || "file";
   const ext = filename.includes(".") ? filename.split(".").pop()?.toLowerCase() : "";
 
-  // For local files pass path (preserves filename), for URLs pass buffer
   let contentType = "";
-  const source: string | Buffer = isLocalPath ? mediaUrl : await (async () => {
-    const res = await fetch(mediaUrl);
-    if (!res.ok) throw new Error(`Failed to download media: ${res.status}`);
-    contentType = res.headers.get("content-type") || "";
-    return Buffer.from(await res.arrayBuffer());
-  })();
+  let source: Buffer;
+  if (mediaUrl.startsWith("/")) {
+    source = await readLocalMedia(mediaUrl, ctx);
+  } else {
+    const fetched = await fetchRemoteMedia(mediaUrl);
+    source = fetched.buffer;
+    contentType = fetched.contentType;
+  }
 
   const uploadType = resolveUploadType(ext ?? "", contentType);
 
@@ -106,6 +111,25 @@ async function sendMaxMedia(ctx: MaxSendContext & { mediaUrl?: string }): Promis
   };
 }
 
+const maxOutbound = {
+  deliveryMode: "direct" as const,
+
+  resolveTarget: ({ to }: { to?: string }) => {
+    const trimmed = to?.trim();
+    if (!trimmed) return { ok: false as const, error: new Error("No target specified") };
+    // Strip channel prefix: "max:226805445" → "226805445"
+    return { ok: true as const, to: stripMaxPrefix(trimmed) };
+  },
+
+  sendText: (ctx: unknown) => sendMaxText(ctx as MaxSendContext),
+  sendMedia: (ctx: unknown) =>
+    sendMaxMedia(ctx as MaxSendContext & { mediaUrl?: string } & MediaAccessContext),
+};
+
+type MessageAdapterOutbound = Parameters<
+  typeof createChannelMessageAdapterFromOutbound
+>[0]["outbound"];
+
 export const maxChannel: ChannelPlugin<MaxAccountConfig> = {
   id: "max",
 
@@ -122,7 +146,9 @@ export const maxChannel: ChannelPlugin<MaxAccountConfig> = {
     chatTypes: ["direct", "group"],
     media: true,
     reactions: false,
-    edit: true,
+    // Max can edit, but this plugin exposes no adapter core could call to do
+    // it, so advertising the capability would just misroute edit features.
+    edit: false,
     threads: false,
     reply: true,
   },
@@ -138,20 +164,23 @@ export const maxChannel: ChannelPlugin<MaxAccountConfig> = {
 
   reload: {
     configPrefixes: ["channels.max"],
+    accountScopedRestart: true,
   },
 
   pairing: {
     idLabel: "maxUserId",
     normalizeAllowEntry: (entry: string) => stripMaxPrefix(entry),
-    notifyApproval: async ({ id }) => {
-      const bots = getAllBots();
-      const bot = bots.find(b => b.api !== undefined);
-      if (bot) {
-        try {
-          await bot.api.sendMessageToUser(Number(id), "✅ OpenClaw access approved. Send a message to start chatting.");
-        } catch {
-          // User might not have started conversation with bot yet
-        }
+    notifyApproval: async ({ cfg, id, accountId }) => {
+      const account = findAccount(cfg, accountId);
+      const api = account?.token ? getApiFromRegistry(account.token) : undefined;
+      if (!api) return;
+      try {
+        await api.sendMessageToUser(
+          Number(stripMaxPrefix(String(id))),
+          "✅ OpenClaw access approved. Send a message to start chatting.",
+        );
+      } catch {
+        // User might not have started conversation with bot yet
       }
     },
   },
@@ -200,27 +229,12 @@ export const maxChannel: ChannelPlugin<MaxAccountConfig> = {
     unconfiguredReason: () => "Max bot token is not set",
   },
 
-  outbound: {
-    deliveryMode: "direct",
+  outbound: maxOutbound,
 
-    resolveTarget: ({ to }) => {
-      const trimmed = to?.trim();
-      if (!trimmed) return { ok: false, error: new Error("No target specified") };
-      // Strip channel prefix: "max:226805445" → "226805445"
-      return { ok: true, to: stripMaxPrefix(trimmed) };
-    },
-
-    sendText: (ctx) => sendMaxText(ctx as MaxSendContext),
-    sendMedia: (ctx) => sendMaxMedia(ctx as MaxSendContext & { mediaUrl?: string }),
-  },
-
-  // Core drives its shared message tool through this adapter.
+  // Same adapter object, so the message tool cannot drift from outbound.
   message: createChannelMessageAdapterFromOutbound({
     id: "max",
-    outbound: {
-      sendText: (ctx) => sendMaxText(ctx as unknown as MaxSendContext),
-      sendMedia: (ctx) => sendMaxMedia(ctx as unknown as MaxSendContext & { mediaUrl?: string }),
-    },
+    outbound: maxOutbound as unknown as MessageAdapterOutbound,
   }),
 
   gateway: {
@@ -237,12 +251,21 @@ export const maxChannel: ChannelPlugin<MaxAccountConfig> = {
 
       const log = ctx.log;
       const join = (args: unknown[]) => args.map(String).join(" ");
-      const logger: import("./types.js").PluginLogger = {
-        info: (...args) => (log ? log.info(join(args)) : runtime.log?.(join(args))),
-        warn: (...args) => (log ? log.warn(join(args)) : runtime.log?.(join(args))),
-        error: (...args) => (log ? log.error(join(args)) : runtime.error?.(join(args))),
-        debug: (...args) => log?.debug?.(join(args)),
-      };
+      // Forward arguments untouched to the host sink: joining them here would
+      // flatten Error objects and lose the stack the gateway log needs.
+      const logger: import("./types.js").PluginLogger = log
+        ? {
+            info: (...args) => (log.info as (...a: unknown[]) => void)(...args),
+            warn: (...args) => (log.warn as (...a: unknown[]) => void)(...args),
+            error: (...args) => (log.error as (...a: unknown[]) => void)(...args),
+            debug: (...args) => (log.debug as ((...a: unknown[]) => void) | undefined)?.(...args),
+          }
+        : {
+            info: (...args) => runtime.log?.(join(args)),
+            warn: (...args) => runtime.log?.(join(args)),
+            error: (...args) => runtime.error?.(join(args)),
+            debug: () => {},
+          };
 
       await startPolling({
         accounts: { [accountId]: account },
@@ -252,24 +275,21 @@ export const maxChannel: ChannelPlugin<MaxAccountConfig> = {
 
       // Keep the promise pending until abort signal fires
       await new Promise<void>((resolve) => {
-        if (abortSignal.aborted) {
-          stopPolling();
+        const stop = () => {
+          stopPolling(accountId);
           resolve();
+        };
+        if (abortSignal.aborted) {
+          stop();
           return;
         }
-        abortSignal.addEventListener(
-          "abort",
-          () => {
-            stopPolling();
-            resolve();
-          },
-          { once: true },
-        );
+        abortSignal.addEventListener("abort", stop, { once: true });
       });
     },
 
-    stopAccount: async () => {
-      stopPolling();
+    // Scoped to the account core asked about; sibling accounts keep polling.
+    stopAccount: async (ctx) => {
+      stopPolling(ctx.accountId);
     },
   },
 };

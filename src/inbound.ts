@@ -8,16 +8,28 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { resolveDmGroupAccessWithLists } from "openclaw/plugin-sdk/channel-policy";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
+import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { getMaxRuntime } from "./runtime.js";
 import { getApi } from "./registry.js";
 import { rawUpload, resolveUploadType, stripMaxPrefix } from "./upload-file.js";
+import { fetchRemoteMedia, isPathInsideRoots } from "./media-access.js";
+import { recordLastUsedContext } from "./send-file-tool.js";
 import type { InboundMessage, MaxAccountConfig } from "./types.js";
 
+const CHANNEL_ID = "max" as const;
+
+/** Cap inbound downloads: senders control both the count and the size. */
+const MAX_INBOUND_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+const MAX_INBOUND_ATTACHMENTS = 10;
+
+/** Policy applied when the account config names none. Matches the default that
+ *  security.resolveDmPolicy reports to core, so status cannot claim a gate that
+ *  inbound does not enforce. */
+const DEFAULT_DM_POLICY = "pairing";
+
 async function saveInboundFile(
-  _core: PluginRuntime,
   buffer: Buffer,
   filename: string,
   accountId: string,
@@ -30,14 +42,13 @@ async function saveInboundFile(
   return filePath;
 }
 
-const CHANNEL_ID = "max" as const;
-
 async function deliverMaxReply(params: {
   payload: OutboundReplyPayload;
   chatId: string;
   account: MaxAccountConfig;
+  mediaRoots: readonly string[];
 }): Promise<void> {
-  const { payload, chatId, account } = params;
+  const { payload, chatId, account, mediaRoots } = params;
 
   const api = getApi(account.token);
   if (!api) {
@@ -50,14 +61,20 @@ async function deliverMaxReply(params: {
   // Send media files first — use rawUpload for all types to avoid SDK token bugs with Buffers
   for (const url of mediaUrls) {
     try {
-      const res = await fetch(url);
-      if (!res.ok) continue;
-      const buf = Buffer.from(await res.arrayBuffer());
-      const contentType = res.headers.get("content-type") || "";
       const urlFilename = url.split("/").pop()?.split("?")[0] || "file";
+      let buf: Buffer;
+      let contentType = "";
+
+      if (url.startsWith("/")) {
+        if (!isPathInsideRoots(url, mediaRoots)) continue;
+        buf = await fs.promises.readFile(url);
+      } else {
+        const fetched = await fetchRemoteMedia(url);
+        buf = fetched.buffer;
+        contentType = fetched.contentType;
+      }
 
       const uploadType = resolveUploadType(undefined, contentType);
-
       const attachment = await rawUpload(api, uploadType, buf, urlFilename);
       await api.sendMessageToChat(numericChatId, "", {
         attachments: [attachment],
@@ -67,14 +84,16 @@ async function deliverMaxReply(params: {
     }
   }
 
-  // Extract local file paths from text and send them as attachments
+  // Extract local file paths from text and send them as attachments.
+  // The text is model-authored, so only paths inside the agent's own media
+  // roots are eligible — otherwise a stray path exfiltrates whatever it names.
   let text = payload.text?.trim() ?? "";
   const filePathRegex = /(?:^|\s)(\/[\w/._ -]+\.[\w]+)/g;
   let match: RegExpExecArray | null;
   const filePaths: string[] = [];
   while ((match = filePathRegex.exec(text)) !== null) {
     const fp = match[1].trim();
-    if (fs.existsSync(fp)) {
+    if (isPathInsideRoots(fp, mediaRoots) && fs.existsSync(fp)) {
       filePaths.push(fp);
     }
   }
@@ -99,6 +118,33 @@ async function deliverMaxReply(params: {
   }
 }
 
+/** Download inbound attachments and describe them for the agent. */
+async function collectInboundAttachments(
+  message: InboundMessage,
+  accountId: string,
+): Promise<string[]> {
+  const descriptions: string[] = [];
+  const attachments = (message.attachments ?? []).slice(0, MAX_INBOUND_ATTACHMENTS);
+
+  for (const att of attachments) {
+    if (!att.url) continue;
+    const label = att.filename || att.type || "file";
+    try {
+      const { buffer } = await fetchRemoteMedia(att.url);
+      if (buffer.byteLength > MAX_INBOUND_ATTACHMENT_BYTES) {
+        descriptions.push(`[Attached ${att.type}: ${label} (too large, skipped)]`);
+        continue;
+      }
+      const savedPath = await saveInboundFile(buffer, label, accountId);
+      descriptions.push(`[Attached ${att.type}: ${label}, saved to: ${savedPath}]`);
+    } catch {
+      descriptions.push(`[Attached ${att.type}: ${label} (download failed)]`);
+    }
+  }
+
+  return descriptions;
+}
+
 export async function handleMaxInbound(params: {
   message: InboundMessage;
   account: MaxAccountConfig;
@@ -108,36 +154,8 @@ export async function handleMaxInbound(params: {
   const { message, account, accountId, runtime } = params;
   const core = getMaxRuntime();
 
-  let rawBody = message.text?.trim() ?? "";
-
-  // Handle inbound file attachments — download and add context for the agent
-  if (message.attachments?.length) {
-    const fileDescriptions: string[] = [];
-    for (const att of message.attachments) {
-      if (att.url) {
-        try {
-          const res = await fetch(att.url);
-          if (res.ok) {
-            const buf = Buffer.from(await res.arrayBuffer());
-            const filename = att.filename || att.type || "file";
-            const savedPath = await saveInboundFile(core, buf, filename, accountId);
-            fileDescriptions.push(`[Attached ${att.type}: ${filename}, saved to: ${savedPath}]`);
-          } else {
-            fileDescriptions.push(`[Attached ${att.type}: ${att.filename || att.type} (download failed)]`);
-          }
-        } catch {
-          fileDescriptions.push(`[Attached ${att.type}: ${att.filename || att.type} (download failed)]`);
-        }
-      }
-    }
-    if (fileDescriptions.length) {
-      rawBody = rawBody
-        ? `${rawBody}\n\n${fileDescriptions.join("\n")}`
-        : fileDescriptions.join("\n");
-    }
-  }
-
-  if (!rawBody) {
+  const text = message.text?.trim() ?? "";
+  if (!text && !message.attachments?.length) {
     return;
   }
 
@@ -148,9 +166,11 @@ export async function handleMaxInbound(params: {
   const chatId = message.chatId;
 
   // --- Access control: check DM policy / pairing ---
-  // Max bots live in group-style chats, so apply policy regardless of isGroup
-  const dmPolicy = account.dmPolicy;
-  if (dmPolicy && dmPolicy !== "open") {
+  // Runs before any download or state write, so a sender who is about to be
+  // blocked cannot make the plugin fetch, store, or retarget anything.
+  // Max bots live in group-style chats, so apply policy regardless of isGroup.
+  const dmPolicy = account.dmPolicy ?? DEFAULT_DM_POLICY;
+  if (dmPolicy !== "open") {
     const pairing = createChannelPairingController({
       core,
       channel: CHANNEL_ID,
@@ -178,9 +198,9 @@ export async function handleMaxInbound(params: {
       await pairing.issueChallenge({
         senderId: String(senderId),
         senderIdLine: `maxUserId: ${senderId}`,
-        sendPairingReply: async (text: string) => {
+        sendPairingReply: async (reply: string) => {
           if (api) {
-            await api.sendMessageToChat(Number(chatId), text);
+            await api.sendMessageToChat(Number(chatId), reply);
           }
         },
       });
@@ -190,6 +210,23 @@ export async function handleMaxInbound(params: {
     if (decision === "block") {
       return;
     }
+  }
+
+  // Only an authorized sender may become the target that max_send_file writes to.
+  recordLastUsedContext(Number(chatId), account.token);
+
+  let rawBody = text;
+  if (message.attachments?.length) {
+    const fileDescriptions = await collectInboundAttachments(message, accountId);
+    if (fileDescriptions.length) {
+      rawBody = rawBody
+        ? `${rawBody}\n\n${fileDescriptions.join("\n")}`
+        : fileDescriptions.join("\n");
+    }
+  }
+
+  if (!rawBody) {
+    return;
   }
 
   // For routing, use senderId as peer ID — Max bot chats appear as groups
@@ -203,6 +240,8 @@ export async function handleMaxInbound(params: {
       id: senderId,
     },
   });
+
+  const mediaRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
 
   const fromLabel = isGroup
     ? `group:${chatId}`
@@ -267,6 +306,7 @@ export async function handleMaxInbound(params: {
         payload,
         chatId,
         account,
+        mediaRoots,
       });
     },
     onRecordError: (err: unknown) => {

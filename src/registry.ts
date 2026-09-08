@@ -18,10 +18,6 @@ export function getApi(token: string): Api | undefined {
   return getBot(token)?.api;
 }
 
-export function getAllBots(): Bot[] {
-  return Array.from(botInstances.values());
-}
-
 export function clearRegistry(): void {
   botInstances.clear();
 }

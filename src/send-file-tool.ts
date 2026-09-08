@@ -1,19 +1,26 @@
 import fs from "node:fs";
 import path from "node:path";
-import { getAllBots } from "./registry.js";
+import { getApi } from "./registry.js";
 import { rawUpload, resolveUploadType } from "./upload-file.js";
 
 let lastUsedContext: { chatId: number; accountToken: string } | undefined;
 
+/** Called only for senders that passed access control. */
 export function recordLastUsedContext(chatId: number, accountToken: string): void {
   lastUsedContext = { chatId, accountToken };
 }
 
-function resolveContext(): { chatId: number; api: ReturnType<typeof getAllBots>[0]["api"] } | null {
+export function clearLastUsedContext(): void {
+  lastUsedContext = undefined;
+}
+
+function resolveContext(): { chatId: number; api: NonNullable<ReturnType<typeof getApi>> } | null {
   if (!lastUsedContext) return null;
-  const bot = getAllBots().find(b => b.api !== undefined);
-  if (!bot) return null;
-  return { chatId: lastUsedContext.chatId, api: bot.api };
+  // The chat id belongs to the account that received the message, so the send
+  // has to go through that same bot rather than whichever one registered first.
+  const api = getApi(lastUsedContext.accountToken);
+  if (!api) return null;
+  return { chatId: lastUsedContext.chatId, api };
 }
 
 export const sendFileTool = {

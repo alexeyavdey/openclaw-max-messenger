@@ -33,14 +33,13 @@ export default entry;
 export { maxChannel } from "./channel.js";
 export { startPolling, stopPolling } from "./polling.js";
 export { registerBot, unregisterBot, clearRegistry } from "./registry.js";
-export { getMaxRuntime, setMaxRuntime } from "./runtime.js";
+export { getMaxRuntime, setMaxRuntime, clearMaxRuntime } from "./runtime.js";
 export { handleMaxInbound } from "./inbound.js";
 export type {
   MaxAccountConfig,
   MaxChannelsConfig,
   MaxSendContext,
   MaxSendResult,
-  MaxMediaContext,
   MediaType,
   InboundAttachment,
   InboundMessage,
