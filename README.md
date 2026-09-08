@@ -185,7 +185,58 @@ Remove with `certutil -delstore Root "Russian Trusted Root CA"`.
 
 #### Linux
 
-Convert to DER-backed `.crt` first if your distro expects it:
+Node on Linux does not read the system trust store unless it is told to, so
+installing into the system store is **not** the cheaper path here: it widens
+trust to everything on the host *and* still needs an environment variable on the
+gateway. Unless something else on the machine has to reach
+`platform-api2.max.ru`, give the root to the gateway process alone.
+
+**Gateway only (recommended).** Put the PEM somewhere the gateway cannot rewrite
+— it runs model-driven agents with file access, and a trust anchor writable by
+that process is not a trust anchor:
+
+```bash
+sudo install -D -m 644 -o root -g root \
+  russian_trusted_root_ca.pem /usr/local/share/openclaw-certs/russian_trusted_root_ca.pem
+```
+
+Point the service at it with a **systemd drop-in** rather than editing the unit:
+OpenClaw's own service install/repair flows write that unit file, a drop-in is
+not part of what they rewrite, and rolling back is deleting one file. Substitute
+your unit name (`systemctl list-units '*openclaw*'`):
+
+```bash
+sudo mkdir -p /etc/systemd/system/openclaw-gateway.service.d
+printf '[Service]\nEnvironment=NODE_EXTRA_CA_CERTS=/usr/local/share/openclaw-certs/russian_trusted_root_ca.pem\n' \
+  | sudo tee /etc/systemd/system/openclaw-gateway.service.d/russian-trusted-ca.conf >/dev/null
+sudo systemctl daemon-reload
+sudo systemctl restart openclaw-gateway.service
+```
+
+For a user-scope unit, drop `sudo` and use
+`~/.config/systemd/user/<unit>.d/` with `systemctl --user`. Not under systemd at
+all? Export the variable in whatever launches the gateway — it only has to be in
+the environment before Node starts.
+
+Verify against the running process, not just the unit file:
+
+```bash
+sudo tr '\0' '\n' < /proc/$(systemctl show -p MainPID --value openclaw-gateway.service)/environ \
+  | grep NODE_EXTRA_CA_CERTS
+```
+
+Then confirm the API is actually reachable. `polling started` in the log only
+means the loop was launched, not that TLS succeeded:
+
+```bash
+NODE_EXTRA_CA_CERTS=/usr/local/share/openclaw-certs/russian_trusted_root_ca.pem \
+  node -e 'fetch("https://platform-api2.max.ru/me").then(r=>console.log("ok",r.status)).catch(e=>console.log("fail",e.cause?.code))'
+```
+
+To undo: delete the drop-in, `sudo systemctl daemon-reload`, restart the gateway.
+
+**Machine-wide**, if other software on the host needs the root too. Convert to
+DER-backed `.crt` first if your distro expects it:
 
 ```bash
 openssl x509 -outform der -in russian_trusted_root_ca.pem -out russian_trusted_root_ca.crt
@@ -203,9 +254,8 @@ trust list | grep Russian
 RHEL / CentOS: copy into `/etc/pki/ca-trust/source/anchors/`, then `sudo update-ca-trust`.
 Arch: copy into `/etc/ca-certificates/trust-source/anchors/`, then `sudo update-ca-trust`.
 
-On Linux, Node does not read the system store unless it is told to. Either run
-the gateway with `NODE_USE_SYSTEM_CA=1`, or point `NODE_EXTRA_CA_CERTS` at the
-PEM. Both must be set **before Node starts**.
+This still leaves Node out of the loop, so the gateway additionally needs
+`NODE_USE_SYSTEM_CA=1` — same drop-in, same before-Node-starts rule.
 
 #### What this actually grants
 
@@ -213,6 +263,15 @@ A trusted root can vouch for a certificate on *any* domain, not only Max. In the
 admin/machine domain that applies to everything on the host; through
 `NODE_EXTRA_CA_CERTS` it applies to that one process. Pick the narrowest scope
 that works for you.
+
+Two properties of `NODE_EXTRA_CA_CERTS` are worth being precise about, because
+they cut in opposite directions. It **adds** to Node's bundled roots instead of
+replacing them, so every host the gateway already reached keeps validating
+normally. But it is scoped per *process*, not per *host*: inside the gateway
+that root is equally valid for every domain it talks to — your model providers
+included, not only `max.ru`. Scoping the trust to this one API would take a
+dedicated TLS agent inside the plugin; the environment variable cannot express
+it.
 
 `NODE_EXTRA_CA_CERTS` cannot be supplied through OpenClaw's `env.vars`: Node
 reads it while initializing TLS, before plugin config is loaded, so setting it
