@@ -25,7 +25,7 @@ Connect your OpenClaw AI agents to Max Messenger — send and receive messages, 
 | OpenClaw | **2026.9.2 or newer** |
 | Node | 22.22.3+, 24.15+, or 25.9+ |
 | Max bot token | from **@MasterBot** in the Max app |
-| TLS trust | the Russian Trusted Root CA — see below |
+| TLS trust | the Russian Trusted Root CA — [see below](#4-the-max-api-host-needs-a-certificate-your-machine-probably-does-not-trust) |
 
 This plugin targets the 2026.9 plugin SDK. It will **not** load on OpenClaw older
 than 2026.9.2 — the narrow `openclaw/plugin-sdk/*` subpaths it imports do not
@@ -110,21 +110,115 @@ Keep `~/.openclaw/openclaw.json` readable only by you.
 ### 4. The Max API host needs a certificate your machine probably does not trust
 
 Since `@maxhub/max-bot-api` 0.2.4 the client talks to `platform-api2.max.ru`,
-whose certificate is issued by the Russian Trusted Sub CA (Минцифры). That root
-is not in the default trust store, so without it every request fails with
-`UNABLE_TO_GET_ISSUER_CERT_LOCALLY` and the channel never connects.
+whose certificate chains to the **Russian Trusted Root CA** (Минцифры). That
+root ships in no default trust store, so until you install it every request
+fails with `UNABLE_TO_GET_ISSUER_CERT_LOCALLY` and the channel never connects.
 
-Get the PEM from [gosuslugi.ru/crt](https://www.gosuslugi.ru/crt) (direct link:
-`https://gu-st.ru/content/Other/doc/russiantrustedca.pem`) and make the gateway
-process trust it. `NODE_EXTRA_CA_CERTS` has to be set **before Node starts** —
-supplying it through OpenClaw's `env.vars` at runtime is too late and silently
-does nothing.
+The server sends the intermediate itself, so **installing the root certificate
+is enough**. The upload hosts (`iu.oneme.ru`, `fu.oneme.ru`) use Let's Encrypt
+and need nothing.
 
-The upload hosts (`iu.oneme.ru`, `fu.oneme.ru`) use Let's Encrypt and need
-nothing extra.
+**Check first — you may already have it.** Many machines in Russia do:
 
-Do **not** reach for `NODE_TLS_REJECT_UNAUTHORIZED=0`: that disables certificate
-verification for every host the gateway talks to, not just Max.
+```bash
+NODE_USE_SYSTEM_CA=1 node -e 'fetch("https://platform-api2.max.ru/me").then(r=>console.log("ok",r.status)).catch(e=>console.log("fail",e.cause?.code))'
+```
+
+`ok 401` means the root is trusted and you can skip this whole section. Note
+that `curl` on macOS reads a file bundle rather than the keychain, so a curl
+failure here proves nothing — test with Node.
+
+Otherwise download it from [gosuslugi.ru/crt](https://www.gosuslugi.ru/crt), or directly:
+
+```bash
+curl -O https://gu-st.ru/content/Other/doc/russiantrustedca.pem
+# the PEM holds both the root and the intermediate; split them out
+awk '/BEGIN CERT/{n++} {print > ("cert" n ".pem")}' russiantrustedca.pem
+# cert2.pem is the root — check before installing anything
+openssl x509 -in cert2.pem -noout -subject -fingerprint -sha256
+```
+
+Expected root fingerprint (SHA-256):
+
+```
+D2:6D:2D:02:31:B7:C3:9F:92:CC:73:85:12:BA:54:10:35:19:E4:40:5D:68:B5:BD:70:3E:97:88:CA:8E:CF:31
+```
+
+#### macOS
+
+OpenClaw's gateway service already runs with `NODE_USE_SYSTEM_CA=1`, so Node
+reads the system keychain and no environment variable is needed — installing
+into the keychain is all it takes.
+
+```bash
+sudo security add-trusted-cert -d -r trustRoot \
+  -k /Library/Keychains/System.keychain russian_trusted_root_ca.pem
+```
+
+`-d` installs into the admin (machine-wide) domain. To keep it to your own user,
+drop `-d` and use `-k ~/Library/Keychains/login.keychain-db` — but verify that
+Node still picks it up, since user trust settings are not always consulted.
+
+Verify, then restart the gateway:
+
+```bash
+curl -sSI https://platform-api2.max.ru/me | head -1   # expect 401, not a TLS error
+openclaw gateway restart
+```
+
+To undo:
+
+```bash
+sudo security delete-certificate -c "Russian Trusted Root CA" /Library/Keychains/System.keychain
+```
+
+#### Windows
+
+Run an elevated prompt:
+
+```powershell
+certutil -addstore -f Root russian_trusted_root_ca.pem
+```
+
+For the current user only, use `certutil -user -addstore Root russian_trusted_root_ca.pem`.
+Remove with `certutil -delstore Root "Russian Trusted Root CA"`.
+
+#### Linux
+
+Convert to DER-backed `.crt` first if your distro expects it:
+
+```bash
+openssl x509 -outform der -in russian_trusted_root_ca.pem -out russian_trusted_root_ca.crt
+```
+
+Debian / Ubuntu:
+
+```bash
+sudo mkdir -p /usr/local/share/ca-certificates/russian-trusted
+sudo cp russian_trusted_root_ca.crt /usr/local/share/ca-certificates/russian-trusted/
+sudo update-ca-certificates -v
+trust list | grep Russian
+```
+
+RHEL / CentOS: copy into `/etc/pki/ca-trust/source/anchors/`, then `sudo update-ca-trust`.
+Arch: copy into `/etc/ca-certificates/trust-source/anchors/`, then `sudo update-ca-trust`.
+
+On Linux, Node does not read the system store unless it is told to. Either run
+the gateway with `NODE_USE_SYSTEM_CA=1`, or point `NODE_EXTRA_CA_CERTS` at the
+PEM. Both must be set **before Node starts**.
+
+#### What this actually grants
+
+A trusted root can vouch for a certificate on *any* domain, not only Max. In the
+admin/machine domain that applies to everything on the host; through
+`NODE_EXTRA_CA_CERTS` it applies to that one process. Pick the narrowest scope
+that works for you.
+
+`NODE_EXTRA_CA_CERTS` cannot be supplied through OpenClaw's `env.vars`: Node
+reads it while initializing TLS, before plugin config is loaded, so setting it
+at runtime silently does nothing. Do **not** substitute
+`NODE_TLS_REJECT_UNAUTHORIZED=0` — that turns off certificate verification for
+every host the gateway talks to.
 
 ### 5. Bot chats look like groups
 
