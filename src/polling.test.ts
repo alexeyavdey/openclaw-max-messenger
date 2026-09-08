@@ -66,7 +66,8 @@ describe("startPolling", () => {
     });
 
     expect(botInstances[0].start).toHaveBeenCalledWith({
-      allowedUpdates: ["message_created"],
+      mode: "polling",
+      options: { allowedUpdates: ["message_created"] },
     });
   });
 
@@ -74,7 +75,8 @@ describe("startPolling", () => {
     await startPolling({ accounts: { default: { token: "tok-a" } }, logger });
 
     expect(botInstances[0].start).toHaveBeenCalledWith({
-      allowedUpdates: ["message_created", "bot_started"],
+      mode: "polling",
+      options: { allowedUpdates: ["message_created", "bot_started"] },
     });
   });
 });

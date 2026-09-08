@@ -13,7 +13,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { getMaxRuntime } from "./runtime.js";
 import { getApi } from "./registry.js";
-import { rawUpload, resolveUploadType, stripMaxPrefix } from "./upload-file.js";
+import { uploadAttachment, resolveUploadType, stripMaxPrefix } from "./upload-file.js";
 import { fetchRemoteMedia, isPathInsideRoots } from "./media-access.js";
 import { recordLastUsedContext } from "./send-file-tool.js";
 import type { InboundMessage, MaxAccountConfig } from "./types.js";
@@ -58,7 +58,7 @@ async function deliverMaxReply(params: {
   const numericChatId = Number(chatId);
   const mediaUrls = resolveOutboundMediaUrls(payload);
 
-  // Send media files first — use rawUpload for all types to avoid SDK token bugs with Buffers
+  // Send media files first, then whatever text is left.
   for (const url of mediaUrls) {
     try {
       const urlFilename = url.split("/").pop()?.split("?")[0] || "file";
@@ -75,7 +75,7 @@ async function deliverMaxReply(params: {
       }
 
       const uploadType = resolveUploadType(undefined, contentType);
-      const attachment = await rawUpload(api, uploadType, buf, urlFilename);
+      const attachment = await uploadAttachment(api, uploadType, buf, urlFilename);
       await api.sendMessageToChat(numericChatId, "", {
         attachments: [attachment],
       });
@@ -103,7 +103,7 @@ async function deliverMaxReply(params: {
       const filename = path.basename(fp);
       const ext = path.extname(fp).toLowerCase();
       const uploadType = resolveUploadType(ext);
-      const attachment = await rawUpload(api, uploadType, fp, filename);
+      const attachment = await uploadAttachment(api, uploadType, fp, filename);
       await api.sendMessageToChat(numericChatId, uploadType === "file" ? filename : "", {
         attachments: [attachment],
       });

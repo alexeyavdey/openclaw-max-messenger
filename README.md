@@ -25,6 +25,7 @@ Connect your OpenClaw AI agents to Max Messenger — send and receive messages, 
 | OpenClaw | **2026.9.2 or newer** |
 | Node | 22.22.3+, 24.15+, or 25.9+ |
 | Max bot token | from **@MasterBot** in the Max app |
+| TLS trust | the Russian Trusted Root CA — see below |
 
 This plugin targets the 2026.9 plugin SDK. It will **not** load on OpenClaw older
 than 2026.9.2 — the narrow `openclaw/plugin-sdk/*` subpaths it imports do not
@@ -70,7 +71,7 @@ given, so a single-bot setup only ever needs `default`.
 
 ## Read this before you go live
 
-Four things bite people setting this up. None of them produce an obvious error.
+Five things bite people setting this up. None of them produce an obvious error.
 
 ### 1. An unset `dmPolicy` now means pairing, not open
 
@@ -106,7 +107,26 @@ and env reference forms (`{"source": "env", ...}`) are **not** resolved by this
 plugin, so a reference object would be sent as-is and authentication would fail.
 Keep `~/.openclaw/openclaw.json` readable only by you.
 
-### 4. Bot chats look like groups
+### 4. The Max API host needs a certificate your machine probably does not trust
+
+Since `@maxhub/max-bot-api` 0.2.4 the client talks to `platform-api2.max.ru`,
+whose certificate is issued by the Russian Trusted Sub CA (Минцифры). That root
+is not in the default trust store, so without it every request fails with
+`UNABLE_TO_GET_ISSUER_CERT_LOCALLY` and the channel never connects.
+
+Get the PEM from [gosuslugi.ru/crt](https://www.gosuslugi.ru/crt) (direct link:
+`https://gu-st.ru/content/Other/doc/russiantrustedca.pem`) and make the gateway
+process trust it. `NODE_EXTRA_CA_CERTS` has to be set **before Node starts** —
+supplying it through OpenClaw's `env.vars` at runtime is too late and silently
+does nothing.
+
+The upload hosts (`iu.oneme.ru`, `fu.oneme.ru`) use Let's Encrypt and need
+nothing extra.
+
+Do **not** reach for `NODE_TLS_REJECT_UNAUTHORIZED=0`: that disables certificate
+verification for every host the gateway talks to, not just Max.
+
+### 5. Bot chats look like groups
 
 Max treats bot conversations as group-style chats internally (`isGroup: true`).
 The plugin compensates: DM policy is applied to every chat regardless of the
@@ -225,11 +245,9 @@ not block loading.
 
 ## Known issues
 
-- **Max Bot API SDK token bug**: The official `@maxhub/max-bot-api` SDK loses the upload token when uploading files via Buffer. This plugin works around it with a raw upload helper (`rawUpload`) that calls `getUploadUrl` + manual multipart upload. A patch for the SDK is included in `patches/`.
+- **Buffer uploads are staged through a temp file**: the SDK names a Buffer upload with a random UUID, which would otherwise reach the recipient instead of the real filename. Uploading by path also takes the SDK's chunked path, which is what lets large files through.
 
 - **Local media is confined to the agent's media roots**: outbound sends read local files only through the reader OpenClaw supplies, or from inside the roots it allows. A path outside them is refused rather than uploaded, so an agent cannot be talked into attaching an arbitrary file from the host.
-
-- **Large file uploads**: Files over ~10MB may timeout depending on network conditions. The SDK has a 20-second upload timeout. For large files, consider compressing or splitting them.
 
 - **Deprecated inbound dispatch**: the plugin still calls `dispatchInboundReplyWithBase`, which the SDK marks deprecated. It keeps working until the next plugin-SDK major release.
 

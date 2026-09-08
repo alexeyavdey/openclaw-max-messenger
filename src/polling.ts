@@ -15,7 +15,12 @@ const SUPPORTED_ATTACHMENT_TYPES = new Set([
   "image", "video", "audio", "file", "sticker", "contact", "location", "share",
 ]);
 
-const DEFAULT_ALLOWED_UPDATES = ["message_created", "bot_started"];
+// UpdateType is not re-exported by the package, so take it from the public
+// start() signature instead of reaching into the SDK's internal paths.
+type PollingStart = Extract<NonNullable<Parameters<Bot["start"]>[0]>, { mode: "polling" }>;
+type AllowedUpdates = NonNullable<NonNullable<PollingStart["options"]>["allowedUpdates"]>;
+
+const DEFAULT_ALLOWED_UPDATES: AllowedUpdates = ["message_created", "bot_started"];
 
 export function extractAttachments(
   rawAttachments: RawAttachment[] | null | undefined
@@ -186,7 +191,10 @@ function runWithRestart(ctx: AccountContext, state: AccountState, attempt = 0): 
   const isCurrent = () => !state.stopped && activeBots.get(accountId) === state;
 
   state.bot.start({
-    allowedUpdates: (config.allowedUpdates ?? DEFAULT_ALLOWED_UPDATES) as never,
+    mode: "polling",
+    options: {
+      allowedUpdates: (config.allowedUpdates as AllowedUpdates | undefined) ?? DEFAULT_ALLOWED_UPDATES,
+    },
   }).then(() => {
     logger.info(`Max poll loop ended normally (${accountId})`);
   }).catch((err) => {

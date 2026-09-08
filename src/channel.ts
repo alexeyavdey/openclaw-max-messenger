@@ -3,7 +3,7 @@ import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/cha
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { getApi as getApiFromRegistry } from "./registry.js";
 import { startPolling, stopPolling } from "./polling.js";
-import { rawUpload, resolveUploadType, stripMaxPrefix } from "./upload-file.js";
+import { uploadAttachment, resolveUploadType, stripMaxPrefix } from "./upload-file.js";
 import { fetchRemoteMedia, readLocalMedia, type MediaAccessContext } from "./media-access.js";
 import type {
   MaxAccountConfig,
@@ -95,8 +95,7 @@ async function sendMaxMedia(
 
   const uploadType = resolveUploadType(ext ?? "", contentType);
 
-  // Use rawUpload for all types to avoid SDK token bugs with Buffer sources
-  const attachment = await rawUpload(api, uploadType, source, filename);
+  const attachment = await uploadAttachment(api, uploadType, source, filename);
   const sent = await api.sendMessageToChat(
     chatId,
     ctx.text ?? (uploadType === "file" ? filename : ""),

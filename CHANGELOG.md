@@ -5,6 +5,50 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — 2026-09-08
+
+Upgrade to `@maxhub/max-bot-api` 0.3.1 (was 0.2.2).
+
+**Operational prerequisite:** since SDK 0.2.4 the client talks to
+`platform-api2.max.ru`, whose certificate chains to the Russian Trusted Root CA
+(Минцифры). Without that root in the gateway process's trust store every
+request fails with `UNABLE_TO_GET_ISSUER_CERT_LOCALLY`. `NODE_EXTRA_CA_CERTS`
+must be set before Node starts; setting it through OpenClaw's `env.vars` at
+runtime is too late and silently does nothing. The upload hosts
+(`iu.oneme.ru`, `fu.oneme.ru`) use Let's Encrypt and need nothing.
+
+### Removed
+
+- `rawUpload` and `patches/@maxhub+max-bot-api+0.2.2.patch`. The upstream bug is
+  fixed: 0.2.2's `uploadFromBuffer` accepted a `token` argument it never
+  destructured, so the token from `getUploadUrl` was dropped; 0.3.1 forwards it
+  and falls back to it when the upload response is not JSON. Verified against
+  the live API from both a path and a Buffer source.
+
+### Changed
+
+- Uploads go through the SDK's own `uploadImage`/`uploadVideo`/`uploadAudio`/
+  `uploadFile`, which brings chunked range uploads, so the previous "files over
+  ~10MB may time out" limitation is gone.
+- Buffer sources are staged through a temp file. The SDK names a Buffer upload
+  with `randomUUID()`, which would reach the recipient instead of the real
+  filename, and the path route is also the one with chunked upload.
+- `bot.start()` takes the new `{ mode: "polling", options }` shape.
+- `allowedUpdates` is typed from the public `Bot["start"]` signature instead of
+  being cast to `never`. `UpdateType` and `AttachmentRequest` are not
+  re-exported by the package, so both are derived from public signatures rather
+  than reached for through internal paths.
+
+### Notes
+
+- Methods this plugin uses — `sendMessageToChat`, `sendMessageToUser`,
+  `editMessage`, `raw.uploads.getUploadUrl` — are unchanged across the upgrade.
+  `editMyInfo` and `getChatByLink` were removed upstream; neither was used.
+- 0.3.1 also adds a Comments API, chat-admin management, webhook support with
+  `subscribe`/`unsubscribe`, and `clientOptions.fetch`/`baseUrl`. None are used
+  yet; webhooks would replace the polling restart machinery but need a public
+  domain.
+
 ## [0.4.0] — 2026-09-08
 
 Code-review pass. **Breaking:** an unset `dmPolicy` is now enforced as
@@ -172,6 +216,7 @@ Initial release: Max Messenger channel plugin for OpenClaw — text, media and
 file messaging, inbound attachments, DM access control, per-sender agent
 routing, and the `max_send_file` tool.
 
+[0.5.0]: https://github.com/alexeyavdey/openclaw-max-messenger/releases/tag/v0.5.0
 [0.4.0]: https://github.com/alexeyavdey/openclaw-max-messenger/releases/tag/v0.4.0
 [0.3.0]: https://github.com/alexeyavdey/openclaw-max-messenger/releases/tag/v0.3.0
 [0.2.0]: https://github.com/alexeyavdey/openclaw-max-messenger/releases/tag/v0.2.0

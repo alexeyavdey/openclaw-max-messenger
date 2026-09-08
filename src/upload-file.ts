@@ -1,8 +1,14 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import type { Api } from "@maxhub/max-bot-api";
 
 export type UploadType = "image" | "video" | "audio" | "file";
-type RawUploadsApi = { raw: { uploads: { getUploadUrl: (opts: { type: UploadType }) => Promise<{ url: string; token?: string }> } } };
+
+// Neither AttachmentRequest nor UpdateType is re-exported by the package, so
+// derive the attachment shape from the public sendMessageToChat signature.
+type SendMessageExtra = NonNullable<Parameters<Api["sendMessageToChat"]>[2]>;
+export type MaxAttachmentRequest = NonNullable<SendMessageExtra["attachments"]>[number];
 
 const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp"]);
 const VIDEO_EXTS = new Set(["mp4", "mov", "avi", "webm"]);
@@ -22,48 +28,50 @@ export function stripMaxPrefix(id: string): string {
   return id.replace(/^max:/i, "");
 }
 
+function safeFileName(filename: string): string {
+  const base = path.basename(filename).replace(/[^a-zA-Z0-9._-]/g, "_");
+  return base || "file";
+}
+
 /**
- * Upload any media via raw Max Bot API, bypassing the SDK's upload helpers.
+ * Upload media and return the attachment payload for sendMessage.
  *
- * The SDK loses the token for Buffer uploads in some cases. This helper
- * uses the raw getUploadUrl endpoint and captures the token from either
- * the getUploadUrl response or the upload response itself.
- *
- * Works for all types: image, video, audio, file.
+ * Buffers are staged through a temp file on purpose: the SDK names a Buffer
+ * upload with a random UUID, which would reach the recipient instead of the
+ * real filename. Going through a path also takes the SDK's chunked upload
+ * path, which is what makes large files survive.
  */
-export async function rawUpload(
-  api: RawUploadsApi,
+export async function uploadAttachment(
+  api: Api,
   type: UploadType,
   source: string | Buffer,
   filename: string,
-): Promise<{ type: UploadType; payload: { token: string } }> {
-  const resp = await api.raw.uploads.getUploadUrl({ type });
-  const uploadUrl = resp.url;
-  let token = resp.token;
+): Promise<MaxAttachmentRequest> {
+  let tempDir: string | undefined;
+  let uploadPath: string;
 
-  const buf = typeof source === "string" ? fs.readFileSync(source) : source;
-  const name = typeof source === "string" ? path.basename(source) : filename;
+  if (typeof source === "string") {
+    uploadPath = source;
+  } else {
+    tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "max-upload-"));
+    uploadPath = path.join(tempDir, safeFileName(filename));
+    await fs.promises.writeFile(uploadPath, source);
+  }
 
-  const formData = new FormData();
-  formData.append("data", new Blob([buf as BlobPart]), name);
-  const uploadRes = await fetch(uploadUrl, { method: "POST", body: formData });
-
-  // Token may come from the upload response instead of getUploadUrl
-  if (!token) {
-    try {
-      const json = await uploadRes.json() as Record<string, unknown>;
-      if (typeof json.token === "string") {
-        token = json.token;
-      }
-    } catch {
-      // response may not be JSON
+  try {
+    switch (type) {
+      case "image":
+        return (await api.uploadImage({ source: uploadPath })).toJson();
+      case "video":
+        return (await api.uploadVideo({ source: uploadPath })).toJson();
+      case "audio":
+        return (await api.uploadAudio({ source: uploadPath })).toJson();
+      default:
+        return (await api.uploadFile({ source: uploadPath })).toJson();
+    }
+  } finally {
+    if (tempDir) {
+      await fs.promises.rm(tempDir, { recursive: true, force: true });
     }
   }
-
-  if (!token) {
-    throw new Error(`Max API did not return an upload token for type "${type}"`);
-  }
-
-  return { type, payload: { token } };
 }
-

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { getApi } from "./registry.js";
-import { rawUpload, resolveUploadType } from "./upload-file.js";
+import { uploadAttachment, resolveUploadType } from "./upload-file.js";
 
 let lastUsedContext: { chatId: number; accountToken: string } | undefined;
 
@@ -68,7 +68,7 @@ export const sendFileTool = {
     const uploadType = resolveUploadType(ext);
 
     try {
-      const attachment = await rawUpload(api, uploadType, filePath, filename);
+      const attachment = await uploadAttachment(api, uploadType, filePath, filename);
       const fileSize = fs.statSync(filePath).size;
       await api.sendMessageToChat(chatId, caption || filename, {
         attachments: [attachment],
