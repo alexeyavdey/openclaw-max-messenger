@@ -251,6 +251,10 @@
                       }
                     ]
                   }
+                },
+                "apiBaseUrl": {
+                  "type": "string",
+                  "description": "Bot API base URL (default https://platform-api2.max.ru)"
                 }
               }
             }

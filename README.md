@@ -66,6 +66,14 @@ Then restart the gateway:
 openclaw gateway restart
 ```
 
+Optional per-account `apiBaseUrl` overrides the Bot API base URL (default: the SDK's
+`https://platform-api2.max.ru`) — useful when the API must be reached through a
+proxy/relay or an alternate host:
+
+```json
+"default": { "token": "YOUR_BOT_TOKEN", "apiBaseUrl": "https://max-api.example.com" }
+```
+
 Accounts are keyed by id. The key `default` is used whenever no account id is
 given, so a single-bot setup only ever needs `default`.
 

@@ -1,5 +1,7 @@
 export interface MaxAccountConfig {
   token: string;
+  /** Bot API base URL (default: SDK default https://platform-api2.max.ru). Lets a relay/alternate host be used. */
+  apiBaseUrl?: string;
   botId?: string;
   allowedUpdates?: string[];
   accountId?: string | null;

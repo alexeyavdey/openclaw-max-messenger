@@ -69,7 +69,7 @@ type AccountContext = {
  *  replacement bot is never left polling without listeners. */
 function createBot(ctx: AccountContext): Bot {
   const { accountId, config, logger, runtime } = ctx;
-  const bot = new Bot(config.token);
+  const bot = new Bot(config.token, config.apiBaseUrl ? { clientOptions: { baseUrl: config.apiBaseUrl } } : undefined);
 
   bot.on("message_created", (botCtx: unknown) => {
     const c = botCtx as Record<string, unknown>;
