@@ -15,7 +15,10 @@ class MockBot {
     }),
   );
 
-  constructor(public token: string) {
+  constructor(
+    public token: string,
+    public config?: { clientOptions?: { baseUrl?: string } },
+  ) {
     botInstances.push(this);
   }
 
@@ -78,6 +81,95 @@ describe("startPolling", () => {
       mode: "polling",
       options: { allowedUpdates: ["message_created", "bot_started"] },
     });
+  });
+});
+
+describe("apiBaseUrl", () => {
+  it("leaves the SDK default host in place when unset", async () => {
+    await startPolling({ accounts: { default: { token: "tok-a" } }, logger });
+
+    expect(botInstances[0].config).toBeUndefined();
+  });
+
+  it("passes a configured base URL to the SDK client", async () => {
+    await startPolling({
+      accounts: { default: { token: "tok-a", apiBaseUrl: "https://relay.example.com" } },
+      logger,
+    });
+
+    expect(botInstances[0].config).toEqual({
+      clientOptions: { baseUrl: "https://relay.example.com/" },
+    });
+  });
+
+  // new URL("messages", "https://relay/api") resolves to "https://relay/messages",
+  // so the trailing slash is what makes a relay mounted under a path work.
+  it("keeps a path prefix resolvable by appending a slash", async () => {
+    await startPolling({
+      accounts: { default: { token: "tok-a", apiBaseUrl: "https://relay.example.com/api" } },
+      logger,
+    });
+
+    expect(botInstances[0].config?.clientOptions?.baseUrl).toBe(
+      "https://relay.example.com/api/",
+    );
+  });
+
+  it("gives the replacement bot the same base URL after a crash", async () => {
+    vi.useFakeTimers();
+    await startPolling({
+      accounts: { default: { token: "tok-a", apiBaseUrl: "https://relay.example.com/" } },
+      logger,
+    });
+
+    botInstances[0].crash(new Error("poll crashed"));
+    await vi.advanceTimersByTimeAsync(2000);
+
+    const replacement = botInstances[botInstances.length - 1];
+    expect(replacement.config?.clientOptions?.baseUrl).toBe("https://relay.example.com/");
+  });
+
+  it("rejects a malformed base URL before any bot is created", async () => {
+    await expect(
+      startPolling({
+        accounts: { default: { token: "tok-a", apiBaseUrl: "relay.example.com" } },
+        logger,
+      }),
+    ).rejects.toThrow(/apiBaseUrl is not a valid URL/);
+
+    expect(botInstances).toHaveLength(0);
+  });
+
+  it("rejects a base URL that is not http(s)", async () => {
+    await expect(
+      startPolling({
+        accounts: { default: { token: "tok-a", apiBaseUrl: "ftp://relay.example.com" } },
+        logger,
+      }),
+    ).rejects.toThrow(/must be http/);
+  });
+
+  it("starts no account when a sibling account has a bad base URL", async () => {
+    await expect(
+      startPolling({
+        accounts: {
+          default: { token: "tok-a" },
+          support: { token: "tok-b", apiBaseUrl: "nonsense" },
+        },
+        logger,
+      }),
+    ).rejects.toThrow(/apiBaseUrl/);
+
+    expect(botInstances).toHaveLength(0);
+  });
+
+  it("warns that a plain http base URL exposes the token", async () => {
+    await startPolling({
+      accounts: { default: { token: "tok-a", apiBaseUrl: "http://127.0.0.1:8080" } },
+      logger,
+    });
+
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("unencrypted"));
   });
 });
 

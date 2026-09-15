@@ -254,7 +254,8 @@
                 },
                 "apiBaseUrl": {
                   "type": "string",
-                  "description": "Bot API base URL (default https://platform-api2.max.ru)"
+                  "format": "uri",
+                  "description": "Bot API base URL (default https://platform-api2.max.ru). Media uploads and attachment downloads are not routed through it."
                 }
               }
             }
@@ -273,6 +274,10 @@
         "allowFrom": {
           "label": "Max Allowed Senders",
           "help": "Max user ids allowed to talk to the bot. Entries may carry a \"max:\" prefix."
+        },
+        "apiBaseUrl": {
+          "label": "Max API Base URL",
+          "help": "Overrides the Bot API host (default https://platform-api2.max.ru). The bot token is sent to this host, so use https and a host you control. Media uploads and attachment downloads still go to the addresses the API returns."
         },
         "streaming": {
           "label": "Max Streaming",

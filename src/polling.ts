@@ -63,13 +63,56 @@ type AccountContext = {
   config: MaxAccountConfig;
   logger: PluginLogger;
   runtime?: RuntimeEnv;
+  /** Already validated and normalised; undefined means the SDK's default host. */
+  apiBaseUrl?: string;
 };
+
+/**
+ * Validate a configured base URL and make it safe to resolve against.
+ *
+ * The SDK builds every call as `new URL("messages", baseUrl)`, so a base that
+ * carries a path loses it unless it ends in a slash, and a malformed base
+ * throws on the first call — deep inside the poll loop, where it surfaces only
+ * as an endless restart cycle.
+ */
+function resolveApiBaseUrl(
+  raw: string | undefined,
+  accountId: string,
+  logger: PluginLogger,
+): string | undefined {
+  if (!raw) return undefined;
+
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error(`Max account "${accountId}": apiBaseUrl is not a valid URL ("${raw}")`);
+  }
+
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
+    throw new Error(
+      `Max account "${accountId}": apiBaseUrl must be http(s), got "${url.protocol}//"`,
+    );
+  }
+
+  if (url.protocol === "http:") {
+    logger.warn(
+      `Max account "${accountId}": apiBaseUrl is plain http, so the bot token travels unencrypted`,
+    );
+  }
+
+  if (!url.pathname.endsWith("/")) url.pathname += "/";
+  return url.href;
+}
 
 /** Build a bot with every handler attached. Restarts reuse this so a
  *  replacement bot is never left polling without listeners. */
 function createBot(ctx: AccountContext): Bot {
-  const { accountId, config, logger, runtime } = ctx;
-  const bot = new Bot(config.token, config.apiBaseUrl ? { clientOptions: { baseUrl: config.apiBaseUrl } } : undefined);
+  const { accountId, config, logger, runtime, apiBaseUrl } = ctx;
+  const bot = new Bot(
+    config.token,
+    apiBaseUrl ? { clientOptions: { baseUrl: apiBaseUrl } } : undefined,
+  );
 
   bot.on("message_created", (botCtx: unknown) => {
     const c = botCtx as Record<string, unknown>;
@@ -165,13 +208,28 @@ export async function startPolling(params: {
 }): Promise<void> {
   const { accounts, logger, runtime } = params;
 
+  // Resolved up front: a bad base URL must fail the whole call before any
+  // account starts polling, not leave some accounts running and others not.
+  const baseUrls = new Map<string, string | undefined>(
+    Object.entries(accounts).map(([accountId, config]) => [
+      accountId,
+      resolveApiBaseUrl(config.apiBaseUrl, accountId, logger),
+    ]),
+  );
+
   for (const [accountId, config] of Object.entries(accounts)) {
     if (activeBots.has(accountId)) {
       logger.warn(`Polling already active for account "${accountId}"`);
       continue;
     }
 
-    const ctx: AccountContext = { accountId, config, logger, runtime };
+    const ctx: AccountContext = {
+      accountId,
+      config,
+      logger,
+      runtime,
+      apiBaseUrl: baseUrls.get(accountId),
+    };
     const bot = createBot(ctx);
     const state: AccountState = { bot, token: config.token, stopped: false };
 
@@ -180,7 +238,10 @@ export async function startPolling(params: {
 
     runWithRestart(ctx, state);
 
-    logger.info(`Max polling started for account "${accountId}"`);
+    logger.info(
+      `Max polling started for account "${accountId}"` +
+        (ctx.apiBaseUrl ? ` (apiBaseUrl ${ctx.apiBaseUrl})` : ""),
+    );
   }
 }
 

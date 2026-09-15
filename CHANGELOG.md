@@ -5,6 +5,31 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] — 2026-09-15
+
+### Added
+
+- Optional per-account `apiBaseUrl`, passed to the SDK client as
+  `clientOptions.baseUrl`, so an account can talk to a relay, proxy or mirror
+  instead of the default `https://platform-api2.max.ru`. Unset behaves exactly
+  as before.
+
+  The value is validated once, when the account starts: a malformed URL or a
+  scheme other than `http`/`https` fails the account with an explicit error
+  rather than throwing on the first API call, where it would surface only as an
+  endless poll-loop restart. A base URL carrying a path gets a trailing slash
+  added, because the SDK resolves methods relatively — without it
+  `https://relay.example.com/api` would silently resolve to
+  `https://relay.example.com/messages`. Plain `http` is allowed for a loopback
+  relay but logs a warning: the bot token travels in the `Authorization` header
+  of every request.
+
+  Two limits are worth knowing. Media is not routed through this base — upload
+  targets and inbound attachment URLs come from the API response — so a gateway
+  with no route to the `*.oneme.ru` hosts still fails on files while text works.
+  And the host sees the token and every message, so it should be one you
+  control.
+
 ## [0.5.0] — 2026-09-08
 
 Upgrade to `@maxhub/max-bot-api` 0.3.1 (was 0.2.2).
@@ -216,6 +241,7 @@ Initial release: Max Messenger channel plugin for OpenClaw — text, media and
 file messaging, inbound attachments, DM access control, per-sender agent
 routing, and the `max_send_file` tool.
 
+[0.6.0]: https://github.com/alexeyavdey/openclaw-max-messenger/releases/tag/v0.6.0
 [0.5.0]: https://github.com/alexeyavdey/openclaw-max-messenger/releases/tag/v0.5.0
 [0.4.0]: https://github.com/alexeyavdey/openclaw-max-messenger/releases/tag/v0.4.0
 [0.3.0]: https://github.com/alexeyavdey/openclaw-max-messenger/releases/tag/v0.3.0

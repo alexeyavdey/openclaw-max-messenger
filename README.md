@@ -66,16 +66,38 @@ Then restart the gateway:
 openclaw gateway restart
 ```
 
-Optional per-account `apiBaseUrl` overrides the Bot API base URL (default: the SDK's
-`https://platform-api2.max.ru`) — useful when the API must be reached through a
-proxy/relay or an alternate host:
+Accounts are keyed by id. The key `default` is used whenever no account id is
+given, so a single-bot setup only ever needs `default`.
+
+### Optional: a different Bot API host
+
+`apiBaseUrl` points one account at another Bot API host — a relay, a proxy, or a
+mirror — instead of the SDK default `https://platform-api2.max.ru`:
 
 ```json
 "default": { "token": "YOUR_BOT_TOKEN", "apiBaseUrl": "https://max-api.example.com" }
 ```
 
-Accounts are keyed by id. The key `default` is used whenever no account id is
-given, so a single-bot setup only ever needs `default`.
+Three things to know before you use it:
+
+- **The bot token goes to that host**, in the `Authorization` header of every
+  request. Point it only at a host you control, over `https`. Plain `http` is
+  accepted for a loopback relay but logs a warning, because the token then
+  crosses the network in the clear.
+- **Media does not go through it.** Uploads are sent to the address
+  `POST /uploads` hands back, and inbound attachments are downloaded from the
+  URLs in the update — both come from the API response, not from this base. In
+  practice those are the `*.oneme.ru` hosts, which need no special trust, so the
+  TLS case below is covered; a gateway with no network route to them at all will
+  still fail on files while text keeps working.
+- **A path prefix does not need a trailing slash from you** — the plugin adds
+  one. The SDK resolves each method relatively (`new URL("messages", base)`), so
+  `https://relay.example.com/api` would otherwise silently become
+  `https://relay.example.com/messages`.
+
+A malformed value, or one that is not `http`/`https`, fails the account at
+startup with an explicit error instead of leaving the poll loop retrying an
+unusable URL forever.
 
 ## Read this before you go live
 
@@ -286,6 +308,12 @@ reads it while initializing TLS, before plugin config is loaded, so setting it
 at runtime silently does nothing. Do **not** substitute
 `NODE_TLS_REJECT_UNAUTHORIZED=0` — that turns off certificate verification for
 every host the gateway talks to.
+
+If installing the root is not an option at all, the other way out is
+[`apiBaseUrl`](#optional-a-different-bot-api-host): terminate TLS on a relay you
+control and let the gateway talk to that instead. Nothing else needs the root —
+the upload hosts already use Let's Encrypt — but you are adding a hop that sees
+your bot token and every message passing through it.
 
 ### 5. Bot chats look like groups
 
